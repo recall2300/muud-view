@@ -30,6 +30,17 @@ jobs:
           path: target/release/muud-view.exe
           retention-days: 14
 
+  speed:
+    name: Speed (regression check)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # Decode times divided by a calibration loop, compared with
+      # bench/baseline.txt; fails if more than 30% slower. Results appear
+      # as annotations and in the run summary.
+      - run: cargo test --profile bench-ci --locked -- --ignored --nocapture bench_ci
+
   licenses:
     name: License policy
     runs-on: ubuntu-latest

@@ -1,0 +1,2 @@
+# Workload time / calibration time on CI (see src/core/bench.rs).
+# Filled in from the first CI run.

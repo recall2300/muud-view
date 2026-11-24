@@ -808,6 +808,37 @@ fn color_name(c: image::ColorType) -> String {
     .to_string()
 }
 
+/// A photo-like test JPEG: smooth gradients plus sensor-style noise, so
+/// the entropy decoder has real work (flat images decode unrealistically
+/// fast).
+#[cfg(test)]
+pub(crate) fn synthetic_photo(w: u32, h: u32) -> Vec<u8> {
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let img = image::RgbImage::from_fn(w, h, |x, y| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        let n = (seed % 24) as i32 - 12;
+        let fx = x as f32 / w as f32;
+        let fy = y as f32 / h as f32;
+        let wave = ((fx * 37.0).sin() * (fy * 23.0).cos() * 40.0) as i32;
+        let c = |base: f32| (base as i32 + wave + n).clamp(0, 255) as u8;
+        image::Rgb([
+            c(60.0 + 150.0 * fx),
+            c(90.0 + 120.0 * fy),
+            c(200.0 - 140.0 * fx * fy),
+        ])
+    });
+    let mut out = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92);
+    if std::env::var_os("MUUD_BENCH_P3").is_some() {
+        use image::ImageEncoder;
+        let _ = enc.set_icc_profile(moxcms::ColorProfile::new_display_p3().encode().unwrap());
+    }
+    enc.encode_image(&img).unwrap();
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1123,36 +1154,6 @@ mod tests {
         let img = ColorImage::new([400, 200], vec![Color32::WHITE; 400 * 200]);
         assert_eq!(shrink(&img, 100).size, [100, 50]);
         assert_eq!(shrink(&img, 1000).size, [400, 200]);
-    }
-
-    /// A photo-like test JPEG: smooth gradients plus sensor-style noise, so
-    /// the entropy decoder has real work (flat images decode unrealistically
-    /// fast).
-    pub(crate) fn synthetic_photo(w: u32, h: u32) -> Vec<u8> {
-        let mut seed = 0x2545_f491_4f6c_dd1du64;
-        let img = image::RgbImage::from_fn(w, h, |x, y| {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            let n = (seed % 24) as i32 - 12;
-            let fx = x as f32 / w as f32;
-            let fy = y as f32 / h as f32;
-            let wave = ((fx * 37.0).sin() * (fy * 23.0).cos() * 40.0) as i32;
-            let c = |base: f32| (base as i32 + wave + n).clamp(0, 255) as u8;
-            image::Rgb([
-                c(60.0 + 150.0 * fx),
-                c(90.0 + 120.0 * fy),
-                c(200.0 - 140.0 * fx * fy),
-            ])
-        });
-        let mut out = Vec::new();
-        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92);
-        if std::env::var_os("MUUD_BENCH_P3").is_some() {
-            use image::ImageEncoder;
-            let _ = enc.set_icc_profile(moxcms::ColorProfile::new_display_p3().encode().unwrap());
-        }
-        enc.encode_image(&img).unwrap();
-        out
     }
 
     /// `cargo test --release -- --ignored --nocapture bench_jpeg`, optionally

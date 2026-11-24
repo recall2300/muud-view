@@ -72,6 +72,14 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Speed check in CI: release optimisation without the slow fat-LTO link.
+[profile.bench-ci]
+inherits = "release"
+lto = false
+codegen-units = 16
+panic = "unwind"
+strip = false
+
 # Decoders are the hot path; keep them fast even in debug builds.
 [profile.dev.package."*"]
 opt-level = 2
