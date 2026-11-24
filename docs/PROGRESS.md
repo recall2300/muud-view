@@ -15,11 +15,28 @@
 | v0.1 | ✅ MVP |
 | v0.2 | ✅ M1 · ✅ M2 · ✅ M3 · ✅ M4 · ✅ M5 · ✅ M6 · ✅ M7 — 릴리스 준비 완료 |
 | v0.3 | ✅ M8 · ✅ M9 · ✅ M10 · ✅ M11 · ✅ M12 — 릴리스 준비 완료 |
-| v0.4 | ✅ M13 · ✅ M14 · ✅ M15 · ✅ M16 · ✅ M17 · ✅ M18 · ⬜ M19 |
-| v0.5 | ⬜ M20–M24 |
+| v0.4 | ✅ M13 · ✅ M14 · ✅ M15 · ✅ M16 · ✅ M17 · ✅ M18 · ✅ M19 — 릴리스 준비 완료 |
+| v0.5 | ⬜ M20–M24 (다음) |
 | v0.6 | ⬜ M25–M29 |
 
 ---
+
+## 2026-11-24 — M19 성능 측정 → v0.4.0 ✅
+
+**zune-jpeg vs libjpeg-turbo** ([BENCHMARKS.md](BENCHMARKS.md))
+- `bench/compare_libjpeg_turbo.py`: 같은 파일을 libjpeg-turbo 3.1(Pillow 경유, 앱에는 안 들어감)로 디코딩해서 비교
+- 실제 R6 Mark III 파일이 없어서 같은 크기(6960×4640) 합성 사진 4:2:0 / 4:2:2로 측정: libjpeg-turbo 원본 247~260ms vs zune-jpeg 350~400ms(약 1.5배), libjpeg-turbo 1/4 축소 디코딩 167~180ms vs 화면 크기 450~530ms(약 3배)
+- **결정 필요:** libjpeg-turbo로 바꾸면 화면 크기 디코딩이 장당 ~300ms 빨라지지만 C 빌드(NASM·CMake)와 라이선스 정책 변경(IJG)이 따라옴. 지금은 순수 Rust 유지
+- 실물 파일 측정은 [CHECKLIST](CHECKLIST.md)에 추가
+
+**속도 회귀 CI** — 새 "Speed" 작업(windows-latest): 32.5MP JPEG 원본·화면 크기 디코딩, 축소를 5회 중앙값으로 재고 같은 프로세스의 보정 루프 시간으로 나눈 비율을 `bench/baseline.txt`와 비교, 30% 넘게 느려지면 실패. 결과는 실행 요약과 공개 주석으로 표시. 빌드 시간을 줄이려고 `bench-ci` 프로필(릴리스 최적화, LTO 없음)
+- 첫 CI 기준값: 원본 212ms(비율 3.534), 화면 크기 287ms(4.782), 축소 79ms(1.310)
+
+**v0.4 정리**
+- 버전 0.4.0, README 특징·단축키(`/` 미니맵) 갱신, CHECKLIST에 v0.4 실물 점검 항목
+
+**상태:** Windows CI(빌드·clippy·테스트·속도·라이선스) 통과, 테스트 92개(+ 측정용 3개). 버전 0.4.0.
+릴리스는 Actions → Release → Run workflow → `v0.4.0`.
 
 ## 2026-11-24 — M18 애니메이션 스트리밍 ✅
 

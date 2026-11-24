@@ -83,7 +83,7 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 이름 바꾸기 | `Shift+F2` |
 | 종료 | `Esc` `X` `Ctrl+W` |
 
-전체 목록은 [docs/SPEC.md](docs/SPEC.md), 계획은 [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PLAN.md](docs/PLAN.md), 진행 기록은 [docs/PROGRESS.md](docs/PROGRESS.md)에 있습니다.
+전체 목록은 [docs/SPEC.md](docs/SPEC.md), 계획은 [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PLAN.md](docs/PLAN.md), 진행 기록은 [docs/PROGRESS.md](docs/PROGRESS.md), 성능 측정은 [docs/BENCHMARKS.md](docs/BENCHMARKS.md)에 있습니다.
 
 문제가 생기면 `F5` → `4 COPY DIAGNOSTICS`로 진단 정보를 복사해 [이슈](https://github.com/recall2300/muud-view/issues/new?template=bug_report.md)에 붙여 주세요.
 
