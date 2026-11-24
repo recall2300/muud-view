@@ -84,11 +84,11 @@ cargo test                       # 테스트
 cargo deny check licenses        # 라이선스 정책 확인
 ```
 
-릴리스: `Cargo.toml`의 `version`을 올리고 커밋한 뒤 태그를 push하면 GitHub Actions가 빌드·패키징·게시합니다.
+릴리스는 두 가지 방법 중 하나로 만듭니다. GitHub Actions가 빌드·패키징·게시까지 합니다.
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+- GitHub 웹(폰 포함): **Actions → Release → Run workflow** → 버전(`v0.1.0` 형식) 입력 → Run
+- 터미널: `git tag v0.1.0 && git push origin v0.1.0`
+
+버전을 올릴 때는 `Cargo.toml`의 `version`도 같이 올려 주세요.
 
 `main`에 push할 때마다 CI가 Windows에서 빌드·테스트하고, 결과 `muud-view.exe`를 Actions 아티팩트로 14일간 보관합니다.

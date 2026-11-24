@@ -1,10 +1,16 @@
 name: Release
 
-# Push a tag like v0.1.0 to build and publish a release:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Two ways to publish a release:
+#   1. GitHub → Actions → Release → "Run workflow", enter a version like v0.1.0
+#   2. git tag v0.1.0 && git push origin v0.1.0
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to create, e.g. v0.1.0"
+        required: true
 
 permissions:
   contents: write
@@ -14,7 +20,15 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      VERSION: ${{ inputs.version || github.ref_name }}
     steps:
+      - name: Check version
+        shell: pwsh
+        run: |
+          if ("$env:VERSION" -notmatch '^v\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$') {
+            throw "Version must look like v1.2.3 (got '$env:VERSION')"
+          }
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -33,7 +47,7 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $v = "${{ github.ref_name }}"
+          $v = "$env:VERSION"
           $name = "muud-view-$v-windows-x64"
           New-Item -ItemType Directory $name | Out-Null
           Copy-Item target/release/muud-view.exe "$name/"
@@ -58,6 +72,8 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
           files: |
             muud-view-*-windows-x64.zip
             muud-view-*-windows-x64.exe
