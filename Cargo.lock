@@ -1609,6 +1609,7 @@ dependencies = [
  "rfd",
  "serde",
  "trash",
+ "windows-sys 0.61.2",
  "winresource",
  "zune-core",
  "zune-jpeg",

@@ -7,7 +7,9 @@ use eframe::egui::{self, Event, Vec2, ViewportCommand};
 
 use crate::app::MuudApp;
 use crate::core::decode::upright;
+use crate::core::history::{Action, Undone};
 use crate::core::keymap::{command_for, Cmd};
+use crate::core::photo_folders;
 use crate::core::settings::Background;
 use crate::core::view::{step_zoom, ZoomMode};
 use crate::platform;
@@ -154,13 +156,62 @@ impl MuudApp {
                 if let Some(p) = self.lib.current().cloned() {
                     match platform::move_to_trash(&p) {
                         Ok(()) => {
-                            self.forget_current();
-                            self.notify("MOVED TO RECYCLE BIN");
+                            if let Some((path, index)) = self.forget_current() {
+                                self.history.push(Action::Trashed { path, index });
+                            }
+                            self.notify("MOVED TO RECYCLE BIN · CTRL+Z UNDO");
                         }
                         Err(e) => self.notify(format!("DELETE FAILED: {e}")),
                     }
                 }
             }
+            Cmd::CopyToFolder(n) => {
+                if let Some(p) = self.lib.current().cloned() {
+                    let dir = photo_folders::resolve(&self.settings.photo_folders, n);
+                    match photo_folders::copy_to(&p, &dir) {
+                        Ok(dest) => {
+                            self.history.push(Action::Copied { dest });
+                            self.notify(format!("COPIED → FOLDER {n} · {}", dir.display()));
+                        }
+                        Err(e) => self.notify(format!("COPY FAILED: {e}")),
+                    }
+                }
+            }
+            Cmd::MoveToFolder(n) => {
+                if let Some(p) = self.lib.current().cloned() {
+                    let dir = photo_folders::resolve(&self.settings.photo_folders, n);
+                    match photo_folders::move_to(&p, &dir) {
+                        Ok(to) => {
+                            if let Some((from, index)) = self.forget_current() {
+                                self.history.push(Action::Moved { from, to, index });
+                            }
+                            self.notify(format!("MOVED → FOLDER {n} · CTRL+Z UNDO"));
+                        }
+                        Err(e) => self.notify(format!("MOVE FAILED: {e}")),
+                    }
+                }
+            }
+            Cmd::Undo => match self.history.undo() {
+                None => self.notify("NOTHING TO UNDO"),
+                Some(Ok(Undone::RemovedCopy)) => self.notify("UNDO · COPY REMOVED"),
+                Some(Ok(Undone::Returned { path, index })) => {
+                    let same_folder = self
+                        .lib
+                        .files
+                        .first()
+                        .and_then(|f| f.parent())
+                        .zip(path.parent())
+                        .is_some_and(|(a, b)| a == b);
+                    if same_folder {
+                        self.lib.restore(path, index);
+                        self.reset_view();
+                    } else {
+                        self.open(&path);
+                    }
+                    self.notify("UNDO · FILE RESTORED");
+                }
+                Some(Err(e)) => self.notify(format!("UNDO FAILED: {e}")),
+            },
             Cmd::DeletePermanently => {
                 if self.lib.current().is_some() {
                     self.confirm_delete = true;

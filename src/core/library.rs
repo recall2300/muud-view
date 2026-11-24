@@ -209,7 +209,6 @@ impl Library {
     }
 
     /// Puts a file back at `at` and shows it (used by undo).
-    #[allow(dead_code)] // wired up in M3
     pub fn restore(&mut self, path: PathBuf, at: usize) {
         let at = at.min(self.files.len());
         self.files.insert(at, path);

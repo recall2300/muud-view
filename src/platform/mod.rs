@@ -68,3 +68,33 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
 pub fn delete_permanently(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
 }
+
+/// The user's Pictures folder (follows OneDrive or other redirection on Windows).
+#[cfg(windows)]
+pub fn pictures_dir() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_Pictures, SHGetKnownFolderPath};
+    let mut raw: windows_sys::core::PWSTR = std::ptr::null_mut();
+    // SAFETY: valid GUID pointer and out-pointer; the returned string is
+    // freed with CoTaskMemFree as documented, even on failure.
+    unsafe {
+        let hr = SHGetKnownFolderPath(&FOLDERID_Pictures, 0, std::ptr::null_mut(), &mut raw);
+        let path = if hr >= 0 && !raw.is_null() {
+            let len = (0..).take_while(|&i| *raw.add(i) != 0).count();
+            let wide = std::slice::from_raw_parts(raw, len);
+            Some(PathBuf::from(std::ffi::OsString::from_wide(wide)))
+        } else {
+            None
+        };
+        CoTaskMemFree(raw as *const _);
+        path.or_else(|| std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).join("Pictures")))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn pictures_dir() -> Option<PathBuf> {
+    std::env::var_os("XDG_PICTURES_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Pictures")))
+}

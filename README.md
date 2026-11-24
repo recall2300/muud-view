@@ -60,6 +60,8 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 정보 패널 | `Tab` |
 | 복사: 이미지 / EXIF / 경로 | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Alt+Shift+C` |
 | 휴지통 / 완전 삭제 | `Delete` / `Shift+Delete` (확인 후) |
+| 사진보관함 | `Insert` 1번에 복사, `Ctrl+Insert` 1번으로 이동, `Shift+Insert` 2번에 복사, `Alt+1~9` |
+| 되돌리기 (이동·삭제·복사) | `Ctrl+Z` |
 | 슬라이드쇼 | `Ctrl+1`…`Ctrl+9` 초 간격, `Ctrl+0` 정지 |
 | 배경 (검정·종이·회색) | `B` |
 | 상단 / 하단 바 고정 | `` ` `` / `~` (해제하면 마우스를 가까이 가져갈 때만 표시) |

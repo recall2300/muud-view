@@ -46,6 +46,9 @@ pub enum Cmd {
     Help,
     PinTop,
     PinBottom,
+    CopyToFolder(u8),
+    MoveToFolder(u8),
+    Undo,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -126,6 +129,7 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
             K::B => CycleBackground,
             K::Tab => ToggleInfo,
             K::Delete => Trash,
+            K::Insert => CopyToFolder(1),
             K::F1 => Help,
             K::Backtick => PinTop,
             _ => return None,
@@ -143,6 +147,8 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
             K::F => FlipV,
             K::C => CopyImage,
             K::Enter => ShowInExplorer,
+            K::Insert => MoveToFolder(1),
+            K::Z => Undo,
             K::Num0 => StopSlideshow,
             K::Num1 => Slideshow(1),
             K::Num2 => Slideshow(2),
@@ -159,6 +165,7 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
         match key {
             K::Space => Prev,
             K::Delete => DeletePermanently,
+            K::Insert => CopyToFolder(2),
             K::Num8 => Original,      // `*` on a US keyboard
             K::Backtick => PinBottom, // `~`
             _ => return None,
@@ -170,6 +177,15 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
             K::ArrowLeft => RotateCcw,
             K::ArrowDown => Rotate180,
             K::ArrowUp => ResetRotation,
+            K::Num1 => CopyToFolder(1),
+            K::Num2 => CopyToFolder(2),
+            K::Num3 => CopyToFolder(3),
+            K::Num4 => CopyToFolder(4),
+            K::Num5 => CopyToFolder(5),
+            K::Num6 => CopyToFolder(6),
+            K::Num7 => CopyToFolder(7),
+            K::Num8 => CopyToFolder(8),
+            K::Num9 => CopyToFolder(9),
             _ => return None,
         }
     } else if is(CTRL_SHIFT) {
@@ -228,6 +244,15 @@ pub const HELP: &[HelpSection] = &[
         ],
     ),
     (
+        "PHOTO FOLDERS",
+        &[
+            ("INSERT", "COPY TO FOLDER 1"),
+            ("CTRL+INSERT", "MOVE TO FOLDER 1"),
+            ("SHIFT+INSERT", "COPY TO FOLDER 2"),
+            ("ALT+1…9", "COPY TO FOLDER 1–9"),
+        ],
+    ),
+    (
         "FILE",
         &[
             ("CTRL+O  F2 / F", "OPEN FILE / FOLDER"),
@@ -236,6 +261,7 @@ pub const HELP: &[HelpSection] = &[
             ("CTRL+ALT+SHIFT+C", "COPY PATH"),
             ("CTRL+ENTER", "SHOW IN EXPLORER"),
             ("DEL / SHIFT+DEL", "RECYCLE / DELETE"),
+            ("CTRL+Z", "UNDO MOVE / DELETE"),
             ("ESC  X  CTRL+W", "EXIT"),
         ],
     ),
@@ -305,6 +331,34 @@ mod tests {
         assert_eq!(
             command_for(Key::Minus, mods(false, false, false)),
             Some(Cmd::ZoomOut)
+        );
+    }
+
+    #[test]
+    fn photo_folder_keys() {
+        assert_eq!(
+            command_for(Key::Insert, mods(false, false, false)),
+            Some(Cmd::CopyToFolder(1))
+        );
+        assert_eq!(
+            command_for(Key::Insert, mods(true, false, false)),
+            Some(Cmd::MoveToFolder(1))
+        );
+        assert_eq!(
+            command_for(Key::Insert, mods(false, true, false)),
+            Some(Cmd::CopyToFolder(2))
+        );
+        assert_eq!(
+            command_for(Key::Num7, mods(false, false, true)),
+            Some(Cmd::CopyToFolder(7))
+        );
+        assert_eq!(
+            command_for(Key::Z, mods(true, false, false)),
+            Some(Cmd::Undo)
+        );
+        assert_eq!(
+            command_for(Key::Z, mods(false, false, false)),
+            Some(Cmd::StretchSmall)
         );
     }
 

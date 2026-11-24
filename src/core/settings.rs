@@ -18,6 +18,8 @@ pub struct Settings {
     pub pin_top: bool,
     /// Keep the bottom bar visible instead of hiding it while the mouse is away.
     pub pin_bottom: bool,
+    /// Photo folders 1–9; `None` means `Pictures\\muud-view\\<n>`.
+    pub photo_folders: Vec<Option<std::path::PathBuf>>,
 }
 
 impl Default for Settings {
@@ -29,6 +31,7 @@ impl Default for Settings {
             stretch_small: false,
             pin_top: true,
             pin_bottom: false,
+            photo_folders: vec![None; crate::core::photo_folders::SLOTS],
         }
     }
 }
