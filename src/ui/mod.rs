@@ -4,6 +4,7 @@ pub mod grid;
 pub mod i18n;
 pub mod info_panel;
 pub mod overlays;
+pub mod reading;
 pub mod settings_window;
 pub mod setup;
 pub mod theme;

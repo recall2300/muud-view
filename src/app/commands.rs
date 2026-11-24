@@ -221,6 +221,20 @@ impl MuudApp {
                     }
                 });
             }
+            Cmd::TwoPage | Cmd::Webtoon => {
+                use crate::core::reading::ReadingMode;
+                self.end_compare();
+                self.reading = match (cmd, self.reading) {
+                    (Cmd::Webtoon, ReadingMode::Webtoon) => ReadingMode::Single,
+                    (Cmd::Webtoon, _) => ReadingMode::Webtoon,
+                    (_, m) => m.next_two_page(),
+                };
+                self.webtoon_offset = 0.0;
+                // Screen-size images are fitted differently in a strip.
+                self.update_screen_size(ctx);
+                self.lib.reload();
+                self.notify(self.reading.label());
+            }
             Cmd::Star => {
                 if let Some(p) = self.lib.current().cloned().filter(|p| p.exists()) {
                     let on = self.stars.toggle(&p);

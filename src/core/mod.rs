@@ -13,6 +13,7 @@ pub mod loader;
 pub mod log;
 pub mod photo_folders;
 pub mod pixel;
+pub mod reading;
 pub mod settings;
 pub mod share;
 pub mod stars;

@@ -111,6 +111,10 @@ pub struct MuudApp {
     pub(crate) compare: Option<Compare>,
     /// Show the pixel under the cursor (`P`).
     pub(crate) pixel_info: bool,
+    /// Two pages / webtoon (`D`, `W`).
+    pub(crate) reading: crate::core::reading::ReadingMode,
+    /// Webtoon: how far the current image's top is above the canvas top.
+    pub(crate) webtoon_offset: f32,
     /// Thumbnail grid (`G`).
     pub(crate) grid: bool,
     pub(crate) grid_cols: usize,
@@ -238,6 +242,14 @@ impl MuudApp {
             watcher: None,
             compare: None,
             pixel_info: has("pixel"),
+            reading: if has("webtoon") {
+                crate::core::reading::ReadingMode::Webtoon
+            } else if has("two-page") {
+                crate::core::reading::ReadingMode::TwoLtr
+            } else {
+                Default::default()
+            },
+            webtoon_offset: 0.0,
             grid: has("grid"),
             grid_cols: 1,
             grid_scroll_to: true,
@@ -400,6 +412,24 @@ impl MuudApp {
 
     pub(crate) fn step(&mut self, delta: i64) {
         use crate::core::library::Step;
+        use crate::core::reading::ReadingMode;
+        match self.reading {
+            ReadingMode::Webtoon => {
+                // Navigation keys scroll the strip by most of a screen.
+                let page = self.last_canvas.height() * 0.85;
+                self.webtoon_scroll(page * delta.signum() as f32 * (delta.abs().min(3) as f32));
+                return;
+            }
+            m if m.is_two_page() => {
+                // Two pages at a time.
+                let delta = delta * 2;
+                if let Step::Moved = self.lib.step(delta) {
+                    self.reset_view();
+                }
+                return;
+            }
+            _ => {}
+        }
         match self.lib.step(delta) {
             Step::Moved => self.reset_view(),
             Step::AtEnd => self.notify("LAST IMAGE"),
@@ -736,7 +766,7 @@ impl MuudApp {
 
     /// Tells the loader how big "screen size" is: the monitor, so resizing
     /// the window or going fullscreen does not need a new decode.
-    fn update_screen_size(&self, ctx: &egui::Context) {
+    pub(crate) fn update_screen_size(&self, ctx: &egui::Context) {
         let (monitor, content, ppp) = ctx.input(|i| {
             (
                 i.viewport().monitor_size,
@@ -748,10 +778,15 @@ impl MuudApp {
             .filter(|m| m.x > 0.0 && m.y > 0.0)
             .unwrap_or(content)
             .max(content);
-        self.lib.loader().set_screen_size([
-            (size.x * ppp).round() as usize,
-            (size.y * ppp).round() as usize,
-        ]);
+        // A webtoon strip is fitted by width only: its images are tall.
+        let h = if self.reading == crate::core::reading::ReadingMode::Webtoon {
+            1 << 15
+        } else {
+            (size.y * ppp).round() as usize
+        };
+        self.lib
+            .loader()
+            .set_screen_size([(size.x * ppp).round() as usize, h]);
     }
 
     // -----------------------------------------------------------------------

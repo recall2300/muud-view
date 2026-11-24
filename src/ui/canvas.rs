@@ -58,6 +58,20 @@ impl MuudApp {
             self.wheel_navigation(&ctx, &resp);
             return;
         }
+        // Reading modes draw themselves.
+        match self.reading {
+            crate::core::reading::ReadingMode::Webtoon if self.compare.is_none() => {
+                self.webtoon_view(ui, rect);
+                return;
+            }
+            m if m.is_two_page() && self.compare.is_none() => {
+                self.two_page_view(ui, rect);
+                self.wheel_navigation(&ctx, &resp);
+                return;
+            }
+            _ => {}
+        }
+
         // Comparing: lay out and draw image A; B follows it (see
         // `draw_compare`).
         let cmp = self
