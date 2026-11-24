@@ -35,6 +35,10 @@ impl MuudApp {
             }
             Cmd::CloseFile => self.close_file(),
             Cmd::Exit => ctx.send_viewport_cmd(ViewportCommand::Close),
+            Cmd::Escape if self.compare.is_some() => {
+                self.end_compare();
+                self.notify("COMPARE OFF");
+            }
             Cmd::Escape => {
                 if fullscreen {
                     ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
@@ -119,6 +123,23 @@ impl MuudApp {
             Cmd::FlipH => self.view.flip_h = !self.view.flip_h,
             Cmd::FlipV => self.view.flip_v = !self.view.flip_v,
             Cmd::ToggleInfo => self.settings.show_info = !self.settings.show_info,
+            Cmd::Compare => {
+                if self.compare.is_some() {
+                    self.end_compare();
+                    self.notify("COMPARE OFF");
+                } else {
+                    self.start_compare();
+                }
+            }
+            Cmd::CompareMode => {
+                if let Some(c) = &mut self.compare {
+                    c.mode = c.mode.next();
+                    let label = c.mode.label();
+                    self.notify(format!("COMPARE · {label}"));
+                } else {
+                    self.start_compare();
+                }
+            }
             Cmd::Minimap => {
                 self.settings.minimap = !self.settings.minimap;
                 self.notify(if self.settings.minimap {

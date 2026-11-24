@@ -28,6 +28,24 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// How long after the last key repeat "key held down" mode lasts.
 pub const RAPID_GRACE: Duration = Duration::from_millis(200);
 
+/// Two-image comparison: image A is pinned, the current image is B.
+pub(crate) struct Compare {
+    pub a: PathBuf,
+    pub mode: crate::core::compare::CompareMode,
+    /// Slider position, 0..1 of the canvas width.
+    pub split: f32,
+    pub dragging_split: bool,
+    /// Difference image for (A decode, B decode).
+    pub diff: Option<DiffCache>,
+}
+
+pub(crate) struct DiffCache {
+    pub a: std::sync::Arc<crate::core::decode::Decoded>,
+    pub b: std::sync::Arc<crate::core::decode::Decoded>,
+    pub texture: TextureHandle,
+    pub stats: crate::core::compare::DiffStats,
+}
+
 /// GPU textures for one image, and the decode they came from (so a newer
 /// decode of the same file, e.g. full resolution, replaces them).
 pub(crate) struct Tex {
@@ -85,6 +103,8 @@ pub struct MuudApp {
     pub(crate) rapid_until: Option<Instant>,
     /// Watches the open folder for changes made by other programs.
     watcher: Option<crate::core::watch::Watcher>,
+    pub(crate) compare: Option<Compare>,
+    start_compare: Option<crate::core::compare::CompareMode>,
     ctx: egui::Context,
     pointer_moved_at: Instant,
     bar_visible_top: f32,
@@ -122,6 +142,16 @@ impl MuudApp {
             settings.lang = if has("en") { Lang::En } else { Lang::Ko };
         }
         let show_settings = has("settings");
+        // Screenshots of the compare views.
+        let start_compare = if has("compare-diff") {
+            Some(crate::core::compare::CompareMode::Difference)
+        } else if has("compare-slider") {
+            Some(crate::core::compare::CompareMode::Slider)
+        } else if has("compare") {
+            Some(crate::core::compare::CompareMode::SideBySide)
+        } else {
+            None
+        };
         let start_view = View {
             mode: if has("zoom100") {
                 ZoomMode::Original
@@ -184,6 +214,8 @@ impl MuudApp {
             edge_accum: 0.0,
             rapid_until: None,
             watcher: None,
+            compare: None,
+            start_compare,
             ctx: cc.egui_ctx.clone(),
             pointer_moved_at: Instant::now(),
             bar_visible_top: 0.0,
@@ -247,6 +279,7 @@ impl MuudApp {
 
     pub(crate) fn close_file(&mut self) {
         self.watcher = None;
+        self.end_compare();
         self.lib.clear();
         self.shown = None;
         self.textures.clear();
@@ -258,8 +291,9 @@ impl MuudApp {
         self.next_frame_at = None;
         self.wheel_accum = 0.0;
         self.edge_accum = 0.0;
-        if self.zoom_locked {
-            // Ctrl+K: keep the same zoom and position for the next image.
+        if self.zoom_locked || self.compare.is_some() {
+            // Ctrl+K, or comparing: keep the same zoom and position for the
+            // next image.
             return;
         }
         let mode = match self.view.mode {
@@ -391,6 +425,53 @@ impl MuudApp {
         self.toast = Some((text, Instant::now()));
     }
 
+    /// Starts comparing: the current image becomes A, the next one B.
+    pub(crate) fn start_compare(&mut self) {
+        if self.lib.len() < 2 {
+            self.notify("NEED TWO IMAGES");
+            return;
+        }
+        let Some(a) = self.lib.current().cloned() else {
+            return;
+        };
+        let mode = crate::core::compare::CompareMode::SideBySide;
+        self.compare = Some(Compare {
+            a: a.clone(),
+            mode,
+            split: 0.5,
+            dragging_split: false,
+            diff: None,
+        });
+        self.lib.set_pinned(Some(a));
+        let delta = if self.lib.index + 1 < self.lib.len() {
+            1
+        } else {
+            -1
+        };
+        self.lib.step(delta);
+        self.view.offset = egui::Vec2::ZERO;
+        self.view.mode = ZoomMode::Fit;
+        self.notify(format!("COMPARE · {}", mode.label()));
+    }
+
+    pub(crate) fn end_compare(&mut self) {
+        if self.compare.take().is_some() {
+            self.lib.set_pinned(None);
+        }
+    }
+
+    /// Ends comparing if image A is gone (moved, deleted, renamed away).
+    fn check_compare(&mut self) {
+        let gone = self
+            .compare
+            .as_ref()
+            .is_some_and(|c| !self.lib.files.contains(&c.a));
+        if gone {
+            self.end_compare();
+            self.notify("COMPARE OFF");
+        }
+    }
+
     /// Folder changes made by other programs.
     fn poll_watcher(&mut self) {
         use crate::core::library::Applied;
@@ -440,7 +521,7 @@ impl MuudApp {
     // -----------------------------------------------------------------------
     // Textures
 
-    fn texture_options(&self) -> TextureOptions {
+    pub(crate) fn texture_options(&self) -> TextureOptions {
         TextureOptions {
             magnification: if self.settings.smooth {
                 TextureFilter::Linear
@@ -613,7 +694,18 @@ impl MuudApp {
         };
         job.frames += 1;
         // Wait until the first image is on screen (or a few seconds pass).
-        let ready = self.lib.is_empty() || (self.shown.is_some() && !self.lib.full_pending());
+        let compare_ready = match &self.compare {
+            Some(c) => {
+                self.textures.contains_key(&c.a)
+                    && self
+                        .lib
+                        .current()
+                        .is_some_and(|b| self.textures.contains_key(b))
+            }
+            None => self.start_compare.is_none(),
+        };
+        let ready = self.lib.is_empty()
+            || (self.shown.is_some() && !self.lib.full_pending() && compare_ready);
         let timed_out = job.started.elapsed() > Duration::from_secs(60);
         if !job.requested && ((ready && job.frames > 20) || timed_out) {
             job.requested = true;
@@ -671,6 +763,15 @@ impl eframe::App for MuudApp {
         self.lib.poll();
         self.poll_jobs();
         self.poll_watcher();
+        self.check_compare();
+        if self.shown.is_some() && self.compare.is_none() {
+            if let Some(mode) = self.start_compare.take() {
+                self.start_compare();
+                if let Some(c) = &mut self.compare {
+                    c.mode = mode;
+                }
+            }
+        }
         self.poll_incoming(&ctx);
         self.handle_drops(&ctx);
         self.handle_keys(&ctx);

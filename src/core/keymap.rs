@@ -40,6 +40,8 @@ pub enum Cmd {
     FlipV,
     ToggleInfo,
     Minimap,
+    Compare,
+    CompareMode,
     CopyImage,
     CopyResized,
     CopyPath,
@@ -114,6 +116,8 @@ pub const ALL: &[Cmd] = &[
     Cmd::CycleOsd,
     Cmd::ToggleInfo,
     Cmd::Minimap,
+    Cmd::Compare,
+    Cmd::CompareMode,
     Cmd::PinTop,
     Cmd::PinBottom,
     Cmd::RotateCw,
@@ -211,6 +215,8 @@ pub const DEFAULTS: &[(&str, Cmd)] = &[
     ("O", Cmd::CycleOsd),
     ("Tab", Cmd::ToggleInfo),
     ("Slash", Cmd::Minimap),
+    ("C", Cmd::Compare),
+    ("V", Cmd::CompareMode),
     ("Backtick", Cmd::PinTop),
     ("Shift+Backtick", Cmd::PinBottom),
     ("Ctrl+R", Cmd::RotateCw),
@@ -380,6 +386,8 @@ pub const HELP: &[HelpSection] = &[
             (&[Cmd::CycleOsd], "ON-SCREEN INFO"),
             (&[Cmd::ToggleInfo], "INFO PANEL"),
             (&[Cmd::Minimap], "MINIMAP"),
+            (&[Cmd::Compare], "COMPARE"),
+            (&[Cmd::CompareMode], "COMPARE VIEW"),
             (&[Cmd::PinTop, Cmd::PinBottom], "PIN TOP / BOTTOM BAR"),
         ],
     ),
@@ -629,7 +637,8 @@ mod tests {
         assert_eq!(cmd(Key::C, true, true, false), Some(Cmd::CopyExif));
         assert_eq!(cmd(Key::C, true, true, true), Some(Cmd::CopyPath));
         assert_eq!(cmd(Key::C, true, false, true), Some(Cmd::CopyResized));
-        assert_eq!(cmd(Key::C, false, false, false), None);
+        // Plain C is a different command (compare), not a copy.
+        assert_eq!(cmd(Key::C, false, false, false), Some(Cmd::Compare));
     }
 
     #[test]

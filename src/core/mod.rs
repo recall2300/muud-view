@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod bench;
 pub mod color;
+pub mod compare;
 pub mod decode;
 pub mod exif_info;
 pub mod folder;

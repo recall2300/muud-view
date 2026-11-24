@@ -5,7 +5,10 @@ use eframe::egui::{
     PointerButton, Pos2, Rect, Sense, Shape, StrokeKind, TextureOptions,
 };
 
+use std::path::PathBuf;
+
 use crate::app::{MuudApp, VERSION};
+use crate::core::compare::CompareMode;
 use crate::core::folder;
 use crate::core::keymap::Cmd;
 use crate::core::library::Slot;
@@ -55,7 +58,24 @@ impl MuudApp {
             self.wheel_navigation(&ctx, &resp);
             return;
         }
-        let draw_path = self.shown.clone().filter(|s| self.textures.contains_key(s));
+        // Comparing: lay out and draw image A; B follows it (see
+        // `draw_compare`).
+        let cmp = self
+            .compare
+            .as_ref()
+            .map(|c| (c.a.clone(), c.mode, c.split));
+        let full = rect;
+        let side = matches!(cmp, Some((_, CompareMode::SideBySide, _)));
+        let rect = if side {
+            Rect::from_min_max(full.min, pos2(full.center().x - 1.0, full.max.y))
+        } else {
+            full
+        };
+        let draw_path = match &cmp {
+            Some((a, _, _)) => Some(a.clone()),
+            None => self.shown.clone(),
+        }
+        .filter(|s| self.textures.contains_key(s));
         let Some(draw_path) = draw_path else {
             let name = cur
                 .as_ref()
@@ -162,7 +182,27 @@ impl MuudApp {
             }
         }
 
-        if resp.dragged_by(PointerButton::Primary) {
+        // Slider: dragging near the divider moves it instead of the image.
+        let mut moving_split = false;
+        if let (Some((_, CompareMode::Slider, split)), Some(c)) = (&cmp, self.compare.as_mut()) {
+            let x = full.left() + split * full.width();
+            if resp.drag_started_by(PointerButton::Primary) {
+                c.dragging_split = pointer.is_some_and(|p| (p.x - x).abs() < 14.0);
+            }
+            if !resp.dragged() {
+                c.dragging_split = false;
+            }
+            if c.dragging_split {
+                if let Some(p) = pointer {
+                    c.split = ((p.x - full.left()) / full.width()).clamp(0.0, 1.0);
+                }
+                moving_split = true;
+            }
+            if pointer.is_some_and(|p| (p.x - x).abs() < 14.0) && resp.hovered() {
+                ctx.set_cursor_icon(CursorIcon::ResizeHorizontal);
+            }
+        }
+        if resp.dragged_by(PointerButton::Primary) && !moving_split {
             self.view.offset += resp.drag_delta();
         }
         if resp.double_clicked() {
@@ -191,7 +231,7 @@ impl MuudApp {
             self.lib.request_full();
         }
         let can_pan = shown.x > rect.width() + 0.5 || shown.y > rect.height() + 0.5;
-        if can_pan && resp.hovered() {
+        if can_pan && resp.hovered() && !moving_split {
             ctx.set_cursor_icon(if resp.dragged() {
                 CursorIcon::Grabbing
             } else {
@@ -205,6 +245,8 @@ impl MuudApp {
         let min = pos2((min.x * ppp).round() / ppp, (min.y * ppp).round() / ppp);
         let dest = Rect::from_min_size(min, shown);
 
+        // Side by side: A stays in its half.
+        let p = if side { p.with_clip_rect(rect) } else { p };
         if d.has_alpha {
             let checker = self.checker_texture(&ctx);
             let tiles = dest.size() / 16.0;
@@ -222,7 +264,7 @@ impl MuudApp {
             self.view.flip_h,
             self.view.flip_v,
         );
-        let minimap = (can_pan && self.settings.minimap).then(|| {
+        let minimap = (can_pan && self.settings.minimap && cmp.is_none()).then(|| {
             let size = minimap_size(shown, 168.0);
             // Lifted above the floating bottom bar while it shows.
             let lift = crate::app::BOTTOM_BAR * self.bar_visible_bottom;
@@ -303,6 +345,183 @@ impl MuudApp {
                 hair(),
                 StrokeKind::Inside,
             );
+        }
+
+        if let Some((_, mode, split)) = cmp {
+            let p = ui.painter_at(full);
+            self.draw_compare(&ctx, &p, full, dest, (mode, split), cur.as_ref());
+        }
+    }
+
+    /// Draws image B over/next to A (already drawn at `dest`) and the labels.
+    fn draw_compare(
+        &mut self,
+        ctx: &egui::Context,
+        p: &egui::Painter,
+        full: Rect,
+        dest: Rect,
+        (mode, split): (CompareMode, f32),
+        b_path: Option<&PathBuf>,
+    ) {
+        let label_bg = |p: &egui::Painter, at: Pos2, align: Align2, text: String| {
+            let galley = p.layout_no_wrap(text, mono(11.0), ink());
+            let r = align.anchor_size(at, galley.size() + vec2(12.0, 6.0));
+            p.rect_filled(r, CornerRadius::ZERO, paper());
+            p.galley(r.min + vec2(6.0, 3.0), galley, ink());
+        };
+        let a_name = self
+            .compare
+            .as_ref()
+            .map(|c| folder::file_name(&c.a))
+            .unwrap_or_default();
+        let b_tex = b_path.and_then(|b| self.textures.get(b));
+        let Some(b_tex) = b_tex else {
+            let center = match mode {
+                CompareMode::SideBySide => {
+                    pos2(full.center().x + full.width() / 4.0, full.center().y)
+                }
+                _ => full.center(),
+            };
+            p.text(
+                center,
+                Align2::CENTER_CENTER,
+                crate::ui::i18n::tr("DECODING …"),
+                mono(12.0),
+                self.on_canvas_color(),
+            );
+            return;
+        };
+        let b = b_tex.src.clone();
+        let b_name = b_path.map(|p| folder::file_name(p)).unwrap_or_default();
+        let b_handle = b_tex.handles[0].id();
+        let b_img = self.view.rotated(b.width as f32, b.height as f32);
+        let shown_b = crate::core::compare::match_width(dest.size(), b_img);
+        let uvs_b = compose_uvs(
+            b.orientation,
+            self.view.turns,
+            self.view.flip_h,
+            self.view.flip_v,
+        );
+        match mode {
+            CompareMode::SideBySide => {
+                let half = full.width() / 2.0;
+                let right = Rect::from_min_max(pos2(full.center().x + 1.0, full.min.y), full.max);
+                let at = Rect::from_min_size(dest.min + vec2(half, 0.0), shown_b);
+                p.with_clip_rect(right)
+                    .add(quad(b_handle, corners(at), uvs_b));
+                p.line_segment(
+                    [
+                        pos2(full.center().x, full.min.y),
+                        pos2(full.center().x, full.max.y),
+                    ],
+                    hair(),
+                );
+                label_bg(
+                    p,
+                    full.left_top() + vec2(12.0, 12.0),
+                    Align2::LEFT_TOP,
+                    format!("A · {a_name}"),
+                );
+                label_bg(
+                    p,
+                    pos2(full.center().x + 12.0, full.top() + 12.0),
+                    Align2::LEFT_TOP,
+                    format!("B · {b_name}"),
+                );
+            }
+            CompareMode::Slider => {
+                let x = full.left() + split * full.width();
+                let clip = Rect::from_min_max(pos2(x, full.min.y), full.max);
+                let at = Rect::from_center_size(dest.center(), shown_b);
+                p.with_clip_rect(clip)
+                    .add(quad(b_handle, corners(at), uvs_b));
+                p.line_segment(
+                    [pos2(x, full.min.y), pos2(x, full.max.y)],
+                    egui::Stroke::new(2.0, Color32::WHITE),
+                );
+                p.circle_filled(pos2(x, full.center().y), 9.0, Color32::WHITE);
+                p.circle_stroke(
+                    pos2(x, full.center().y),
+                    9.0,
+                    egui::Stroke::new(1.0, Color32::BLACK),
+                );
+                label_bg(
+                    p,
+                    pos2(x - 8.0, full.top() + 12.0),
+                    Align2::RIGHT_TOP,
+                    format!("A · {a_name}"),
+                );
+                label_bg(
+                    p,
+                    pos2(x + 8.0, full.top() + 12.0),
+                    Align2::LEFT_TOP,
+                    format!("B · {b_name}"),
+                );
+            }
+            CompareMode::Difference => {
+                let a_dec = self
+                    .compare
+                    .as_ref()
+                    .and_then(|c| self.textures.get(&c.a))
+                    .map(|t| t.src.clone());
+                let Some(a_dec) = a_dec else { return };
+                let fresh = self
+                    .compare
+                    .as_ref()
+                    .and_then(|c| c.diff.as_ref())
+                    .is_some_and(|d| {
+                        std::sync::Arc::ptr_eq(&d.a, &a_dec) && std::sync::Arc::ptr_eq(&d.b, &b)
+                    });
+                if !fresh {
+                    let ua =
+                        crate::core::decode::upright(&a_dec.frames[0].image, a_dec.orientation);
+                    let ub = crate::core::decode::upright(&b.frames[0].image, b.orientation);
+                    let (img, stats) = crate::core::compare::diff(&ua, &ub);
+                    let texture = ctx.load_texture("compare-diff", img, self.texture_options());
+                    if let Some(c) = self.compare.as_mut() {
+                        c.diff = Some(crate::app::DiffCache {
+                            a: a_dec,
+                            b: b.clone(),
+                            texture,
+                            stats,
+                        });
+                    }
+                }
+                let Some(diff) = self.compare.as_ref().and_then(|c| c.diff.as_ref()) else {
+                    return;
+                };
+                let uvs = compose_uvs(
+                    crate::core::decode::Orientation::default(),
+                    self.view.turns,
+                    self.view.flip_h,
+                    self.view.flip_v,
+                );
+                p.rect_filled(full, CornerRadius::ZERO, Color32::from_gray(10));
+                p.add(quad(diff.texture.id(), corners(dest), uvs));
+                let s = diff.stats;
+                let summary = if s.changed == 0.0 {
+                    crate::ui::i18n::tr("IDENTICAL").to_string()
+                } else {
+                    format!(
+                        "{:.2}% {} · MAX {}",
+                        s.changed * 100.0,
+                        crate::ui::i18n::tr("PIXELS DIFFER"),
+                        s.max
+                    )
+                };
+                label_bg(
+                    p,
+                    full.left_top() + vec2(12.0, 12.0),
+                    Align2::LEFT_TOP,
+                    format!("A · {a_name}   B · {b_name}"),
+                );
+                label_bg(
+                    p,
+                    full.left_top() + vec2(12.0, 40.0),
+                    Align2::LEFT_TOP,
+                    summary,
+                );
+            }
         }
     }
 

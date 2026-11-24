@@ -63,6 +63,8 @@ pub struct Library {
     /// A navigation key is being held: decode only where we are now, so the
     /// images flown past are skipped instead of queued.
     rapid: bool,
+    /// Kept decoded whatever the position (image A while comparing).
+    pinned: Option<PathBuf>,
     loader: Loader,
 }
 
@@ -78,6 +80,7 @@ impl Library {
             full: None,
             want_full: None,
             rapid: false,
+            pinned: None,
             loader,
         }
     }
@@ -147,6 +150,25 @@ impl Library {
         self.best(self.current()?)
     }
 
+    /// Keeps `path` decoded (and its bytes read) wherever the position goes.
+    pub fn set_pinned(&mut self, path: Option<PathBuf>) {
+        if self.pinned != path {
+            self.pinned = path;
+            self.request();
+        }
+    }
+
+    /// Adds the pinned file right after the current one.
+    fn with_pinned(&self, mut list: Vec<PathBuf>) -> Vec<PathBuf> {
+        if let Some(p) = &self.pinned {
+            if self.files.contains(p) && !list.contains(p) {
+                let at = list.len().min(1);
+                list.insert(at, p.clone());
+            }
+        }
+        list
+    }
+
     pub fn is_rapid(&self) -> bool {
         self.rapid
     }
@@ -167,9 +189,9 @@ impl Library {
             return Vec::new();
         }
         if self.rapid {
-            return vec![self.files[self.index].clone()];
+            return self.with_pinned(vec![self.files[self.index].clone()]);
         }
-        self.around(&[0, 1, 2, -1, 3])
+        self.with_pinned(self.around(&[0, 1, 2, -1, 3]))
     }
 
     /// Files whose bytes should be in memory: the current one, the next
@@ -179,11 +201,11 @@ impl Library {
             return Vec::new();
         }
         if self.rapid {
-            return vec![self.files[self.index].clone()];
+            return self.with_pinned(vec![self.files[self.index].clone()]);
         }
         let mut steps: Vec<i64> = (0..=READ_AHEAD as i64).collect();
         steps.extend([-1, -2]);
-        self.around(&steps)
+        self.with_pinned(self.around(&steps))
     }
 
     /// Files at the given offsets from the current one (positive = the
@@ -794,6 +816,21 @@ mod tests {
             Applied::Emptied
         );
         assert!(lib.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn pinned_image_stays_wanted() {
+        let (mut lib, dir) = lib_with(20);
+        let a = lib.files[0].clone();
+        lib.set_pinned(Some(a.clone()));
+        lib.go_to(15);
+        assert_eq!(lib.wanted()[1], a);
+        assert!(lib.read_list().contains(&a));
+        lib.set_rapid(true);
+        assert_eq!(lib.wanted(), vec![lib.files[15].clone(), a.clone()]);
+        lib.set_pinned(None);
+        assert!(!lib.wanted().contains(&a));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
