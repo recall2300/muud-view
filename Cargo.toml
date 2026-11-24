@@ -1,0 +1,57 @@
+[package]
+name = "muud-view"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "A fast, quiet image viewer for Windows"
+license = "MIT"
+repository = "https://github.com/recall2300/muud-view"
+readme = "README.md"
+publish = false
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = [
+    "glow",
+    "clipboard",
+    "default_fonts",
+    "persistence",
+    "x11",
+    "wayland",
+] }
+image = { version = "0.25", default-features = false, features = [
+    "bmp",
+    "dds",
+    "exr",
+    "gif",
+    "hdr",
+    "ico",
+    "jpeg",
+    "png",
+    "pnm",
+    "qoi",
+    "tga",
+    "tiff",
+    "webp",
+    "rayon",
+] }
+kamadak-exif = "0.6"
+trash = "5"
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[target.'cfg(windows)'.dependencies]
+rfd = "0.18"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Decoders are the hot path; keep them fast even in debug builds.
+[profile.dev.package."*"]
+opt-level = 2

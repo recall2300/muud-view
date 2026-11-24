@@ -1,0 +1,65 @@
+name: Release
+
+# Push a tag like v0.1.0 to build and publish a release:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about,cargo-deny
+
+      - name: License policy
+        run: cargo deny check licenses bans sources
+      - run: cargo test --release --locked
+      - run: cargo build --release --locked
+
+      - name: Third-party notices
+        run: cargo about generate --fail about.hbs -o THIRD_PARTY_NOTICES.html
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}"
+          $name = "muud-view-$v-windows-x64"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item target/release/muud-view.exe "$name/"
+          Copy-Item LICENSE, README.md, THIRD_PARTY_NOTICES.html "$name/"
+          Copy-Item assets/fonts/OFL-*.txt "$name/"
+          Compress-Archive -Path "$name/*" -DestinationPath "$name.zip"
+          Copy-Item target/release/muud-view.exe "$name.exe"
+          Get-FileHash "$name.zip", "$name.exe" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Out-File -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+
+      # Proves the files were built by this workflow from this commit.
+      # Check with: gh attestation verify <file> --repo recall2300/muud-view
+      - name: Build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            muud-view-*-windows-x64.zip
+            muud-view-*-windows-x64.exe
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            muud-view-*-windows-x64.zip
+            muud-view-*-windows-x64.exe
+            SHA256SUMS.txt
+          generate_release_notes: true

@@ -52,10 +52,10 @@ with a fixed memory budget.
 | Action | Input |
 |---|---|
 | Fit to window (default) | `9`, `1` |
-| Original size 100% | `0`, `*`, `Ctrl+middle click` |
+| Original size 100% | `0`, `Shift+8` (`*`), `Ctrl+middle click` |
 | Fit to width | `8` |
 | Zoom in / out | `+` / `-`, `Ctrl+wheel` (zooms at the cursor) |
-| Pan | drag with left mouse button; arrow keys while zoomed |
+| Pan | drag with the left mouse button; the wheel scrolls an image taller than the window |
 | Fullscreen | `Enter`, `Alt+Enter`, `F11`, `N`, middle click |
 | Maximize / restore | `M`, double click |
 | Always on top | `Ctrl+A` |
