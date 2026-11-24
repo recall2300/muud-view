@@ -1,5 +1,6 @@
 pub mod bottom_bar;
 pub mod canvas;
+pub mod grid;
 pub mod i18n;
 pub mod info_panel;
 pub mod overlays;

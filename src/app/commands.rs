@@ -187,6 +187,18 @@ impl MuudApp {
                     }
                 });
             }
+            Cmd::Star => {
+                if let Some(p) = self.lib.current().cloned().filter(|p| p.exists()) {
+                    let on = self.stars.toggle(&p);
+                    self.notify(if on { "STARRED" } else { "UNSTARRED" });
+                }
+            }
+            Cmd::StarredOnly => self.toggle_starred_only(),
+            Cmd::Grid => {
+                self.grid = !self.grid && !self.lib.is_empty();
+                self.grid_scroll_to = true;
+                self.grid_wanted = (0, 0);
+            }
             Cmd::PixelInfo => {
                 self.pixel_info = !self.pixel_info;
                 self.notify(if self.pixel_info {
@@ -432,6 +444,31 @@ impl MuudApp {
         }
     }
 
+    /// Arrow keys, Enter and Esc in the thumbnail grid. Returns true if the
+    /// key was used.
+    fn grid_key(&mut self, key: egui::Key) -> bool {
+        use crate::ui::grid::moved;
+        let (len, cols, i) = (self.lib.len(), self.grid_cols.max(1), self.lib.index);
+        let target = match key {
+            egui::Key::ArrowLeft => moved(i, len, cols, -1, 0),
+            egui::Key::ArrowRight => moved(i, len, cols, 1, 0),
+            egui::Key::ArrowUp => moved(i, len, cols, 0, -1),
+            egui::Key::ArrowDown => moved(i, len, cols, 0, 1),
+            egui::Key::PageUp => moved(i, len, cols, 0, -4),
+            egui::Key::PageDown => moved(i, len, cols, 0, 4),
+            egui::Key::Home => 0,
+            egui::Key::End => len.saturating_sub(1),
+            egui::Key::Enter | egui::Key::Escape => {
+                self.grid = false;
+                return true;
+            }
+            _ => return false,
+        };
+        self.go_to(target);
+        self.grid_scroll_to = true;
+        true
+    }
+
     pub(crate) fn handle_keys(&mut self, ctx: &egui::Context) {
         let presses: Vec<(egui::Key, egui::Modifiers, bool)> = ctx.input(|i| {
             i.events
@@ -533,6 +570,9 @@ impl MuudApp {
                 if matches!(key, egui::Key::F1 | egui::Key::Escape) {
                     continue;
                 }
+            }
+            if self.grid && mods.is_none() && self.grid_key(key) {
+                continue;
             }
             if let Some(cmd) = self.keymap.lookup(key, mods) {
                 if repeat && matches!(cmd, Cmd::Next | Cmd::Prev | Cmd::Forward10 | Cmd::Back10) {
@@ -644,6 +684,7 @@ impl MuudApp {
         match std::fs::rename(&old, &new) {
             Ok(()) => {
                 self.lib.replace_path(&old, new.clone());
+                self.stars.rename(&old, &new);
                 self.history.push(Action::Renamed { from: old, to: new });
                 self.notify(format!("RENAMED · {new_name}"));
             }

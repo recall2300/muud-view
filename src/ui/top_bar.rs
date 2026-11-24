@@ -35,6 +35,12 @@ impl MuudApp {
                 v.push("FLIP".into());
             }
         }
+        if self.lib.current().is_some_and(|p| self.stars.contains(p)) {
+            v.push("STARRED".into());
+        }
+        if self.all_files.is_some() {
+            v.push(format!("STARRED ONLY {}", self.lib.len()));
+        }
         if let Some((every, _)) = self.slideshow {
             v.push(format!("▶ {}S", every.as_secs()));
         }

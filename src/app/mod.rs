@@ -111,10 +111,21 @@ pub struct MuudApp {
     pub(crate) compare: Option<Compare>,
     /// Show the pixel under the cursor (`P`).
     pub(crate) pixel_info: bool,
+    /// Thumbnail grid (`G`).
+    pub(crate) grid: bool,
+    pub(crate) grid_cols: usize,
+    pub(crate) grid_scroll_to: bool,
+    pub(crate) grid_wanted: (usize, usize),
+    pub(crate) thumbs: Option<crate::core::thumbs::ThumbLoader>,
+    pub(crate) thumb_tex: HashMap<PathBuf, TextureHandle>,
+    pub(crate) thumb_failed: std::collections::HashSet<PathBuf>,
+    pub(crate) stars: crate::core::stars::Stars,
+    /// While showing starred images only: the whole folder.
+    pub(crate) all_files: Option<Vec<PathBuf>>,
     /// Screenshots only: pretend the pointer is here (`MUUD_POINTER=x,y`).
     pub(crate) fake_pointer: Option<egui::Pos2>,
     start_compare: Option<crate::core::compare::CompareMode>,
-    ctx: egui::Context,
+    pub(crate) ctx: egui::Context,
     pointer_moved_at: Instant,
     bar_visible_top: f32,
     /// How visible the floating bottom bar was last frame (0..1).
@@ -227,6 +238,15 @@ impl MuudApp {
             watcher: None,
             compare: None,
             pixel_info: has("pixel"),
+            grid: has("grid"),
+            grid_cols: 1,
+            grid_scroll_to: true,
+            grid_wanted: (0, 0),
+            thumbs: None,
+            thumb_tex: HashMap::new(),
+            thumb_failed: Default::default(),
+            stars: crate::core::stars::Stars::load(crate::core::log::data_dir().join("stars.txt")),
+            all_files: None,
             fake_pointer: std::env::var("MUUD_POINTER").ok().and_then(|v| {
                 let (x, y) = v.split_once(',')?;
                 Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
@@ -295,6 +315,8 @@ impl MuudApp {
 
     pub(crate) fn close_file(&mut self) {
         self.watcher = None;
+        self.all_files = None;
+        self.grid = false;
         self.end_compare();
         self.lib.clear();
         self.shown = None;
@@ -439,6 +461,34 @@ impl MuudApp {
             crate::core::log::error(&text);
         }
         self.toast = Some((text, Instant::now()));
+    }
+
+    /// Shows only starred images, or the whole folder again.
+    pub(crate) fn toggle_starred_only(&mut self) {
+        let current = self.lib.current().cloned();
+        if let Some(all) = self.all_files.take() {
+            let i = current
+                .and_then(|c| all.iter().position(|p| *p == c))
+                .unwrap_or(0);
+            self.lib.set_files(all, i);
+            self.notify("ALL IMAGES");
+        } else {
+            let starred = self.stars.filter(&self.lib.files);
+            if starred.is_empty() {
+                self.notify("NO STARRED IMAGES");
+                return;
+            }
+            let i = current
+                .and_then(|c| starred.iter().position(|p| *p == c))
+                .unwrap_or(0);
+            self.all_files = Some(self.lib.files.clone());
+            let n = starred.len();
+            self.lib.set_files(starred, i);
+            self.notify(format!("STARRED ONLY · {n}"));
+        }
+        self.reset_view();
+        self.grid_scroll_to = true;
+        self.grid_wanted = (0, 0);
     }
 
     /// Starts comparing: the current image becomes A, the next one B.
@@ -844,9 +894,15 @@ impl eframe::App for MuudApp {
                 .show(ui, |ui| self.info_panel(ui));
         }
         let bg = self.canvas_color();
-        CentralPanel::no_frame()
-            .frame(egui::Frame::new().fill(bg))
-            .show(ui, |ui| self.canvas(ui));
+        if self.grid && !self.lib.is_empty() {
+            CentralPanel::no_frame()
+                .frame(egui::Frame::new().fill(paper()))
+                .show(ui, |ui| self.grid_view(ui));
+        } else {
+            CentralPanel::no_frame()
+                .frame(egui::Frame::new().fill(bg))
+                .show(ui, |ui| self.canvas(ui));
+        }
 
         self.bar_visible_top = 0.0;
         if !pin_top {
