@@ -118,6 +118,22 @@ pub fn shell_verb(path: &Path, verb: &str) -> Result<(), String> {
     }
 }
 
+/// Opens a web page in the default browser.
+pub fn open_url(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        shell_verb(Path::new(url), "open")
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// Makes `path` (a JPEG/PNG/BMP) the desktop wallpaper.
 pub fn set_wallpaper(path: &Path) -> Result<(), String> {
     #[cfg(windows)]

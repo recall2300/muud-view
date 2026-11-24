@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 최신 버전 받기
+    url: https://github.com/recall2300/muud-view/releases/latest
+    about: 문제가 이미 고쳐졌을 수 있어요. 최신 릴리스부터 확인해 주세요.

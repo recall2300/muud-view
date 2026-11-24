@@ -1,0 +1,37 @@
+name: 버그 신고
+description: 안 되거나 이상하게 동작하는 것
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        F5 → **4 COPY DIAGNOSTICS**로 진단 정보를 복사해 아래에 붙여 주시면 원인을 훨씬 빨리 찾을 수 있어요.
+        사진 파일을 첨부할 때는 GPS 같은 개인정보가 없는지 확인해 주세요 (`Ctrl+S` 공유용 저장을 쓰면 지워집니다).
+  - type: textarea
+    id: what
+    attributes:
+      label: 무슨 일이 있었나요?
+      placeholder: 예) 30MP JPEG 폴더에서 → 키를 누르면 2초씩 멈춰요
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 다시 해 보는 방법
+      placeholder: |
+        1. 폴더 열기
+        2. ...
+  - type: textarea
+    id: expected
+    attributes:
+      label: 원래 어떻게 되어야 하나요?
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 진단 정보 (F5 → 4)
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: 버전
+      placeholder: v0.6.0

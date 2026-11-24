@@ -74,6 +74,8 @@ const KO: &[(&str, &str)] = &[
     ("TWO PAGES", "두 쪽 보기"),
     ("SAVE ROTATION", "회전 저장"),
     ("SET AS WALLPAPER", "바탕화면으로 설정"),
+    ("CHECK FOR UPDATES", "업데이트 확인 (릴리스 페이지 열기)"),
+    ("RELEASES PAGE OPENED", "릴리스 페이지를 열었어요"),
     ("WALLPAPER SET", "바탕화면으로 설정했어요"),
     ("WALLPAPER FAILED", "바탕화면 설정 실패"),
     ("OPEN IN EDITOR", "외부 편집기로 열기"),

@@ -1,0 +1,20 @@
+name: 기능 제안
+description: 있었으면 하는 기능
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: 어떤 상황에서 필요한가요?
+      placeholder: 예) 디자인 시안 두 장을 겹쳐서 비교하고 싶어요
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: 어떻게 동작하면 좋을까요? (단축키, 화면 등)
+  - type: textarea
+    id: other
+    attributes:
+      label: 다른 뷰어에서 본 비슷한 기능이 있다면
+      description: 동작만 참고합니다. 다른 프로그램의 코드·리소스는 쓰지 않아요.

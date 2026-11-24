@@ -101,6 +101,12 @@ jobs:
             Out-File -Encoding ascii SHA256SUMS.txt
           Get-Content SHA256SUMS.txt
 
+      # scoop and winget manifests with this release's hash (see
+      # docs/PACKAGING.md for submitting them).
+      - name: Package manager manifests
+        shell: pwsh
+        run: python packaging/make_manifests.py "$env:VERSION" SHA256SUMS.txt manifests
+
       # Proves the files were built by this workflow from this commit.
       # Check with: gh attestation verify <file> --repo recall2300/muud-view
       - name: Build provenance
@@ -119,4 +125,5 @@ jobs:
             muud-view-*-windows-x64.zip
             muud-view-*-windows-x64.exe
             SHA256SUMS.txt
+            manifests/*
           generate_release_notes: true

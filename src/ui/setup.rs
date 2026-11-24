@@ -14,7 +14,12 @@ pub enum SetupAction {
     Unregister,
     CopyDiagnostics,
     OpenLogFolder,
+    CheckUpdates,
 }
+
+/// Where new versions are published. muud view has no network code: the
+/// update check just opens this page in the browser.
+pub const RELEASES_URL: &str = "https://github.com/recall2300/muud-view/releases/latest";
 
 pub const ACTIONS: &[(SetupAction, &str, &str)] = &[
     (SetupAction::Register, "1", "SET AS IMAGE VIEWER"),
@@ -22,6 +27,7 @@ pub const ACTIONS: &[(SetupAction, &str, &str)] = &[
     (SetupAction::Unregister, "3", "REMOVE FROM WINDOWS"),
     (SetupAction::CopyDiagnostics, "4", "COPY DIAGNOSTICS"),
     (SetupAction::OpenLogFolder, "5", "OPEN LOG FOLDER"),
+    (SetupAction::CheckUpdates, "6", "CHECK FOR UPDATES"),
 ];
 
 impl MuudApp {
@@ -40,6 +46,8 @@ impl MuudApp {
                 ctx.copy_text(self.diagnostics(ctx));
                 Ok("DIAGNOSTICS COPIED".into())
             }
+            SetupAction::CheckUpdates => crate::platform::open_url(RELEASES_URL)
+                .map(|_| format!("RELEASES PAGE OPENED · v{VERSION}")),
             SetupAction::OpenLogFolder => {
                 let dir = log::data_dir();
                 let target = log::path().unwrap_or(dir);
