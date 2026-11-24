@@ -80,6 +80,8 @@ pub struct Settings {
     pub color_manage: bool,
     /// Show where you are in a zoomed-in image (`/`).
     pub minimap: bool,
+    /// Long side of "save for sharing" copies (0 = original size).
+    pub share_size: u32,
 }
 
 impl Default for Settings {
@@ -110,6 +112,7 @@ impl Default for Settings {
             dark: false,
             color_manage: true,
             minimap: true,
+            share_size: 2048,
         }
     }
 }

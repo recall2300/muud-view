@@ -140,6 +140,20 @@ impl MuudApp {
                     self.start_compare();
                 }
             }
+            Cmd::ShareCopy => {
+                let Some(path) = self.lib.current().cloned().filter(|p| p.exists()) else {
+                    return;
+                };
+                let max = self.settings.share_size;
+                self.spawn_job(ctx, move || match crate::core::share::export(&path, max) {
+                    Ok(out) => {
+                        // Ready to paste into a mail or messenger.
+                        let _ = crate::platform::clipboard::write(None, std::slice::from_ref(&out));
+                        format!("SAVED FOR SHARING · {}", folder::file_name(&out))
+                    }
+                    Err(e) => format!("SHARE FAILED · {e}"),
+                });
+            }
             Cmd::PixelInfo => {
                 self.pixel_info = !self.pixel_info;
                 self.notify(if self.pixel_info {

@@ -13,5 +13,6 @@ pub mod log;
 pub mod photo_folders;
 pub mod pixel;
 pub mod settings;
+pub mod share;
 pub mod view;
 pub mod watch;

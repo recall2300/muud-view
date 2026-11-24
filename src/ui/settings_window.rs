@@ -75,6 +75,7 @@ pub fn cmd_label(cmd: Cmd) -> String {
                 Cmd::Compare => "두 이미지 비교",
                 Cmd::CompareMode => "비교 보기 바꾸기",
                 Cmd::PixelInfo => "픽셀 정보",
+                Cmd::ShareCopy => "공유용으로 저장",
                 Cmd::PinTop => "상단 바 고정",
                 Cmd::PinBottom => "하단 바 고정",
                 Cmd::RotateCw => "시계 방향 회전",
@@ -285,6 +286,19 @@ impl MuudApp {
             self.settings.sort_desc as usize,
         ) {
             self.settings.sort_desc = i == 1;
+        }
+        let sizes = crate::core::share::SIZES;
+        let at = sizes
+            .iter()
+            .position(|s| *s == self.settings.share_size)
+            .unwrap_or(1);
+        if let Some(i) = choice_row(
+            ui,
+            "SHARE COPY SIZE",
+            &["1280", "2048", "3840", tr("ORIGINAL")],
+            at,
+        ) {
+            self.settings.share_size = sizes[i];
         }
     }
 
