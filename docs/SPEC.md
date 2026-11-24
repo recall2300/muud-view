@@ -95,14 +95,9 @@ DDS, HDR, OpenEXR — all decoded by pure-Rust decoders.
 - OpenGL renderer (works in VMs and over Remote Desktop).
 - Settings (window size, background, smoothing, info panel) persist between runs.
 
-## Phase 2
+## Next
 
-- Zip/CBZ archives (including CP949 Korean file names), next/previous folder `]` `[`
-- Double-page and webtoon (vertical strip) modes
-- Register as the default viewer / Explorer "Open with" entry from the app
-- AVIF, HEIC (licensing to be reviewed — libheif is LGPL), camera RAW previews
-- Very large images (> 16k px) shown as tiles without downscaling
-- Customizable key bindings, Korean/English UI
+Everything planned after the MVP lives in [ROADMAP.md](ROADMAP.md).
 
 ## Non-goals
 

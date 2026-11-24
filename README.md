@@ -65,7 +65,7 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 열기 | `Ctrl+O` `F2` 파일, `F` 폴더 |
 | 종료 | `Esc` `X` `Ctrl+W` |
 
-전체 목록과 이후 계획은 [docs/SPEC.md](docs/SPEC.md)에 있습니다.
+전체 목록은 [docs/SPEC.md](docs/SPEC.md), 이후 계획은 [docs/ROADMAP.md](docs/ROADMAP.md)에 있습니다.
 
 ## 라이선스
 
