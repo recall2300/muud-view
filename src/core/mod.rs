@@ -11,6 +11,7 @@ pub mod library;
 pub mod loader;
 pub mod log;
 pub mod photo_folders;
+pub mod pixel;
 pub mod settings;
 pub mod view;
 pub mod watch;

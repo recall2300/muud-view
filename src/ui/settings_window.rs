@@ -74,6 +74,7 @@ pub fn cmd_label(cmd: Cmd) -> String {
                 Cmd::Minimap => "미니맵",
                 Cmd::Compare => "두 이미지 비교",
                 Cmd::CompareMode => "비교 보기 바꾸기",
+                Cmd::PixelInfo => "픽셀 정보",
                 Cmd::PinTop => "상단 바 고정",
                 Cmd::PinBottom => "하단 바 고정",
                 Cmd::RotateCw => "시계 방향 회전",

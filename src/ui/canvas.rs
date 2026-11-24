@@ -347,9 +347,88 @@ impl MuudApp {
             );
         }
 
+        if self.pixel_info && cmp.is_none() {
+            self.pixel_readout(&ctx, &p, &resp, rect, dest, &d, pointer);
+        }
+
         if let Some((_, mode, split)) = cmp {
             let p = ui.painter_at(full);
             self.draw_compare(&ctx, &p, full, dest, (mode, split), cur.as_ref());
+        }
+    }
+
+    /// The pixel under the cursor: coordinates (upright, full resolution),
+    /// HEX and RGB next to the cursor. A click copies the HEX value.
+    #[allow(clippy::too_many_arguments)]
+    fn pixel_readout(
+        &mut self,
+        ctx: &egui::Context,
+        p: &egui::Painter,
+        resp: &egui::Response,
+        rect: Rect,
+        dest: Rect,
+        d: &crate::core::decode::Decoded,
+        pointer: Option<Pos2>,
+    ) {
+        use crate::core::pixel;
+        let pos = match self.fake_pointer {
+            Some(fake) => Some(fake),
+            None => pointer.filter(|_| resp.hovered()),
+        };
+        let Some(pos) = pos.filter(|p| rect.contains(*p)) else {
+            return;
+        };
+        let (turns, fh, fv) = (self.view.turns, self.view.flip_h, self.view.flip_v);
+        let upright_uv = pixel::uv_at(
+            corners(dest),
+            compose_uvs(Default::default(), turns, fh, fv),
+            pos,
+        );
+        let Some([x, y]) = pixel::pixel_at(upright_uv, [d.width, d.height]) else {
+            return;
+        };
+        let stored_uv = pixel::uv_at(
+            corners(dest),
+            compose_uvs(d.orientation, turns, fh, fv),
+            pos,
+        );
+        let Some(c) = pixel::sample(d, self.frame_index, stored_uv) else {
+            return;
+        };
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+        let hex = pixel::hex(c);
+        if resp.clicked_by(PointerButton::Primary) {
+            ctx.copy_text(hex.clone());
+            self.notify(format!("COPIED · {hex}"));
+        }
+        let lines = [format!("{x}, {y}"), hex, pixel::rgb(c)];
+        let galleys: Vec<_> = lines
+            .into_iter()
+            .map(|t| p.layout_no_wrap(t, mono(11.0), ink()))
+            .collect();
+        let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max) + 40.0;
+        let h = galleys.len() as f32 * 16.0 + 10.0;
+        // Below-right of the cursor, flipped near the edges.
+        let mut at = pos + vec2(18.0, 18.0);
+        if at.x + w > rect.right() - 4.0 {
+            at.x = pos.x - 18.0 - w;
+        }
+        if at.y + h > rect.bottom() - 4.0 {
+            at.y = pos.y - 18.0 - h;
+        }
+        let box_ = Rect::from_min_size(at, vec2(w, h));
+        p.rect_filled(box_, CornerRadius::ZERO, paper());
+        p.rect_stroke(box_, CornerRadius::ZERO, hair(), StrokeKind::Inside);
+        let swatch = Rect::from_min_size(at + vec2(8.0, 8.0), vec2(18.0, h - 16.0));
+        let [r, g, b, a] = c;
+        p.rect_filled(
+            swatch,
+            CornerRadius::ZERO,
+            Color32::from_rgba_unmultiplied(r, g, b, a),
+        );
+        p.rect_stroke(swatch, CornerRadius::ZERO, hair(), StrokeKind::Inside);
+        for (i, g) in galleys.into_iter().enumerate() {
+            p.galley(at + vec2(32.0, 5.0 + i as f32 * 16.0), g, ink());
         }
     }
 

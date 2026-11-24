@@ -104,6 +104,10 @@ pub struct MuudApp {
     /// Watches the open folder for changes made by other programs.
     watcher: Option<crate::core::watch::Watcher>,
     pub(crate) compare: Option<Compare>,
+    /// Show the pixel under the cursor (`P`).
+    pub(crate) pixel_info: bool,
+    /// Screenshots only: pretend the pointer is here (`MUUD_POINTER=x,y`).
+    pub(crate) fake_pointer: Option<egui::Pos2>,
     start_compare: Option<crate::core::compare::CompareMode>,
     ctx: egui::Context,
     pointer_moved_at: Instant,
@@ -215,6 +219,11 @@ impl MuudApp {
             rapid_until: None,
             watcher: None,
             compare: None,
+            pixel_info: has("pixel"),
+            fake_pointer: std::env::var("MUUD_POINTER").ok().and_then(|v| {
+                let (x, y) = v.split_once(',')?;
+                Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
+            }),
             start_compare,
             ctx: cc.egui_ctx.clone(),
             pointer_moved_at: Instant::now(),

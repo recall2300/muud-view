@@ -140,6 +140,14 @@ impl MuudApp {
                     self.start_compare();
                 }
             }
+            Cmd::PixelInfo => {
+                self.pixel_info = !self.pixel_info;
+                self.notify(if self.pixel_info {
+                    "PIXEL INFO ON"
+                } else {
+                    "PIXEL INFO OFF"
+                });
+            }
             Cmd::Minimap => {
                 self.settings.minimap = !self.settings.minimap;
                 self.notify(if self.settings.minimap {
