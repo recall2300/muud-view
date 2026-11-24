@@ -19,6 +19,26 @@ use super::exif_info::{self, ExifInfo};
 /// Upper bound on decoded animation frames kept in memory (bytes).
 const MAX_ANIMATION_BYTES: usize = 768 * 1024 * 1024;
 
+/// How big the decoded pixels may be.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecodeOpts {
+    /// Largest texture side the GPU accepts.
+    pub max_side: usize,
+    /// Screen quality: shrink to fit this box (upright width, height in
+    /// physical pixels). `None` keeps every pixel the GPU can hold.
+    pub fit: Option<[usize; 2]>,
+}
+
+impl DecodeOpts {
+    /// Every pixel up to `max_side`.
+    pub fn full(max_side: usize) -> Self {
+        Self {
+            max_side,
+            fit: None,
+        }
+    }
+}
+
 pub struct Frame {
     pub image: Arc<ColorImage>,
     pub delay: Duration,
@@ -70,6 +90,8 @@ pub struct Decoded {
     /// Luminance histogram, 256 bins.
     pub histogram: Vec<u32>,
     pub decode_time: Duration,
+    /// Shrunk to screen size; a full decode would have more pixels.
+    pub reduced: bool,
 }
 
 impl Decoded {
@@ -114,11 +136,12 @@ impl Decoded {
             exif: None,
             histogram,
             decode_time: Duration::ZERO,
+            reduced: false,
         }
     }
 }
 
-pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decoded, String> {
+pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decoded, String> {
     let format = image::guess_format(bytes)
         .ok()
         .or_else(|| ImageFormat::from_path(path).ok())
@@ -136,7 +159,7 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
         let orientation =
             Orientation::from_exif(raw_exif.as_ref().map(|e| e.orientation).unwrap_or(1));
         // Fall back to the general path for the rare JPEG zune-jpeg rejects.
-        if let Ok(d) = decode_jpeg(bytes, max_side, orientation, exif.clone()) {
+        if let Ok(d) = decode_jpeg(bytes, opts, orientation, exif.clone()) {
             return Ok(d);
         }
     }
@@ -144,13 +167,13 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
     let animated = match format {
         ImageFormat::Gif => decode_animation(
             image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?,
-            max_side,
+            opts,
         )?,
         ImageFormat::WebP => {
             let dec = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))
                 .map_err(|e| e.to_string())?;
             if dec.has_animation() {
-                decode_animation(dec, max_side)?
+                decode_animation(dec, opts)?
             } else {
                 None
             }
@@ -158,7 +181,7 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
         _ => None,
     };
 
-    if let Some((frames, w, h)) = animated {
+    if let Some((frames, w, h, reduced)) = animated {
         let histogram = histogram_of(&frames[0].image);
         return Ok(Decoded {
             width: w,
@@ -173,6 +196,7 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
             modified: None,
             exif,
             decode_time: Duration::ZERO,
+            reduced,
         });
     }
 
@@ -189,7 +213,6 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
     img.apply_orientation(orientation);
 
     let (width, height) = (img.width(), img.height());
-    let img = fit_texture(img, max_side);
     let image = if color.has_alpha() {
         let rgba = img.into_rgba8();
         let size = [rgba.width() as usize, rgba.height() as usize];
@@ -198,6 +221,7 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
         // Opaque: premultiplied and unmultiplied are identical, skip the maths.
         opaque_color_image(img)
     };
+    let (image, reduced) = fit_for_display(image, opts, Orientation::default());
 
     let histogram = histogram_of(&image);
     let alpha = color.has_alpha() && has_alpha(&image);
@@ -217,6 +241,7 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
         exif,
         histogram,
         decode_time: Duration::ZERO,
+        reduced,
     })
 }
 
@@ -224,31 +249,26 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, max_side: usize) -> Result<Decode
 /// premultiply pass (JPEG has no alpha).
 fn decode_jpeg(
     bytes: &[u8],
-    max_side: usize,
+    opts: DecodeOpts,
     orientation: Orientation,
     exif: Option<ExifInfo>,
 ) -> Result<Decoded, String> {
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
 
-    let opts = DecoderOptions::default()
+    let zopts = DecoderOptions::default()
         .jpeg_set_out_colorspace(ColorSpace::RGBA)
         .set_max_width(1 << 16)
         .set_max_height(1 << 16);
-    let mut dec = zune_jpeg::JpegDecoder::new_with_options(Cursor::new(bytes), opts);
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(Cursor::new(bytes), zopts);
     dec.decode_headers().map_err(|e| format!("{e:?}"))?;
     let (w, h) = dec.dimensions().ok_or("no dimensions")?;
     let gray = matches!(dec.input_colorspace(), Some(ColorSpace::Luma));
     let mut pixels = vec![Color32::BLACK; w * h];
     dec.decode_into(bytemuck::cast_slice_mut(&mut pixels))
         .map_err(|e| format!("{e:?}"))?;
-    let mut image = ColorImage::new([w, h], pixels);
-
-    if w > max_side || h > max_side {
-        let rgba: Vec<u8> = bytemuck::cast_slice(&image.pixels).to_vec();
-        let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba).ok_or("bad buffer")?;
-        image = opaque_color_image(fit_texture(DynamicImage::ImageRgba8(buf), max_side));
-    }
+    let image = ColorImage::new([w, h], pixels);
+    let (image, reduced) = fit_for_display(image, opts, orientation);
 
     let (uw, uh) = if orientation.swaps_axes() {
         (h, w)
@@ -272,6 +292,7 @@ fn decode_jpeg(
         exif,
         histogram,
         decode_time: Duration::ZERO,
+        reduced,
     })
 }
 
@@ -283,14 +304,15 @@ fn opaque_color_image(img: DynamicImage) -> ColorImage {
     ColorImage::new(size, pixels)
 }
 
-type Animation = Option<(Vec<Frame>, u32, u32)>;
+type Animation = Option<(Vec<Frame>, u32, u32, bool)>;
 
 fn decode_animation<'a>(
     dec: impl AnimationDecoder<'a>,
-    max_side: usize,
+    opts: DecodeOpts,
 ) -> Result<Animation, String> {
     let mut frames = Vec::new();
     let mut total = 0usize;
+    let mut reduced = false;
     let (mut w, mut h) = (0, 0);
     for frame in dec.into_frames() {
         let frame = frame.map_err(|e| e.to_string())?;
@@ -301,11 +323,16 @@ fn decode_animation<'a>(
         let buf = frame.into_buffer();
         w = buf.width();
         h = buf.height();
-        let img = fit_texture(DynamicImage::ImageRgba8(buf), max_side).into_rgba8();
-        let size = [img.width() as usize, img.height() as usize];
-        total += size[0] * size[1] * 4;
+        let size = [w as usize, h as usize];
+        let (image, r) = fit_for_display(
+            ColorImage::from_rgba_unmultiplied(size, buf.as_raw()),
+            opts,
+            Orientation::default(),
+        );
+        reduced |= r;
+        total += image.pixels.len() * 4;
         frames.push(Frame {
-            image: Arc::new(ColorImage::from_rgba_unmultiplied(size, img.as_raw())),
+            image: Arc::new(image),
             delay,
         });
         if total > MAX_ANIMATION_BYTES {
@@ -315,20 +342,177 @@ fn decode_animation<'a>(
     Ok(match frames.len() {
         0 => return Err("no frames".into()),
         1 => None, // a single-frame GIF/WebP is a still image
-        _ => Some((frames, w, h)),
+        _ => Some((frames, w, h, reduced)),
     })
 }
 
-/// Downscales so neither side exceeds what the GPU can hold in one texture.
-fn fit_texture(img: DynamicImage, max_side: usize) -> DynamicImage {
-    let (w, h) = (img.width() as usize, img.height() as usize);
+/// The stored-pixel size to shrink to so the image fits `fit` (upright
+/// screen box) once `o` is applied, or `None` if it already fits.
+pub fn screen_target(size: [usize; 2], fit: [usize; 2], o: Orientation) -> Option<[usize; 2]> {
+    let [w, h] = size;
+    let [fw, fh] = if o.swaps_axes() {
+        [fit[1], fit[0]]
+    } else {
+        fit
+    };
+    if fw == 0 || fh == 0 || (w <= fw && h <= fh) {
+        return None;
+    }
+    let s = (fw as f64 / w as f64).min(fh as f64 / h as f64);
+    Some([
+        ((w as f64 * s).round() as usize).max(1),
+        ((h as f64 * s).round() as usize).max(1),
+    ])
+}
+
+/// Size after shrinking so neither side exceeds `max_side`.
+fn gpu_target(size: [usize; 2], max_side: usize) -> Option<[usize; 2]> {
+    let [w, h] = size;
     if w <= max_side && h <= max_side {
-        return img;
+        return None;
     }
     let s = max_side as f64 / w.max(h) as f64;
-    let nw = ((w as f64 * s).round() as u32).max(1);
-    let nh = ((h as f64 * s).round() as u32).max(1);
-    img.resize_exact(nw, nh, image::imageops::FilterType::Triangle)
+    Some([
+        ((w as f64 * s).round() as usize).clamp(1, max_side),
+        ((h as f64 * s).round() as usize).clamp(1, max_side),
+    ])
+}
+
+/// Shrinks a freshly decoded image to screen size (if asked) or to what the
+/// GPU can hold. Returns whether it was shrunk for the screen.
+fn fit_for_display(image: ColorImage, opts: DecodeOpts, o: Orientation) -> (ColorImage, bool) {
+    if let Some(t) = opts.fit.and_then(|f| screen_target(image.size, f, o)) {
+        // Never larger than the GPU limit either.
+        let t = gpu_target(t, opts.max_side).unwrap_or(t);
+        return (downscale(&image, t), true);
+    }
+    match gpu_target(image.size, opts.max_side) {
+        Some(t) => (downscale(&image, t), false),
+        None => (image, false),
+    }
+}
+
+/// High-quality, fast shrink: average whole `k`×`k` blocks first (one pass
+/// over memory), then an exact area-average to the target size. Area
+/// averaging never aliases, and fixed-point maths keeps it quick. Works on
+/// premultiplied pixels, which average correctly.
+pub fn downscale(img: &ColorImage, target: [usize; 2]) -> ColorImage {
+    let [w, h] = img.size;
+    let [tw, th] = [target[0].max(1), target[1].max(1)];
+    if [w, h] == [tw, th] {
+        return img.clone();
+    }
+    let k = (w / tw).min(h / th).max(1);
+    if k >= 2 {
+        let boxed = box_shrink(&img.pixels, w, h, k);
+        area_resample(&boxed, [w / k, h / k], [tw, th])
+    } else {
+        area_resample(&img.pixels, [w, h], [tw, th])
+    }
+}
+
+/// For each output index, the first source index and the 16-bit weights of
+/// the source pixels it covers (summing to 65536).
+fn area_taps(src: usize, dst: usize) -> Vec<(usize, Vec<u32>)> {
+    let r = src as f64 / dst as f64;
+    (0..dst)
+        .map(|o| {
+            let a = o as f64 * r;
+            let b = (a + r).min(src as f64);
+            let s0 = a.floor() as usize;
+            let s1 = (b.ceil() as usize).clamp(s0 + 1, src);
+            let mut w: Vec<u32> = (s0..s1)
+                .map(|s| {
+                    let cover = b.min(s as f64 + 1.0) - a.max(s as f64);
+                    (cover.max(0.0) / (b - a) * 65536.0).round() as u32
+                })
+                .collect();
+            // Make the weights sum to exactly 1.0 so flat areas stay flat.
+            let sum: u32 = w.iter().sum();
+            let big = (0..w.len()).max_by_key(|&i| w[i]).unwrap_or(0);
+            w[big] = (w[big] + 65536).saturating_sub(sum);
+            (s0, w)
+        })
+        .collect()
+}
+
+/// Exact area-average resize (shrinking only), separable, fixed point.
+fn area_resample(src: &[Color32], size: [usize; 2], target: [usize; 2]) -> ColorImage {
+    let [w, h] = size;
+    let [tw, th] = target;
+    let xt = area_taps(w, tw);
+    let yt = area_taps(h, th);
+    // Horizontal pass: h rows of tw pixels.
+    let mut mid = vec![Color32::TRANSPARENT; tw * h];
+    for y in 0..h {
+        let row = &src[y * w..(y + 1) * w];
+        let out = &mut mid[y * tw..(y + 1) * tw];
+        for (o, (s0, wts)) in out.iter_mut().zip(&xt) {
+            let mut acc = [0u32; 4];
+            for (p, &wt) in row[*s0..].iter().zip(wts) {
+                acc[0] += p.r() as u32 * wt;
+                acc[1] += p.g() as u32 * wt;
+                acc[2] += p.b() as u32 * wt;
+                acc[3] += p.a() as u32 * wt;
+            }
+            *o = to_color(acc);
+        }
+    }
+    // Vertical pass, row by row so memory is read in order.
+    let mut out = Vec::with_capacity(tw * th);
+    let mut acc = vec![[0u32; 4]; tw];
+    for (s0, wts) in &yt {
+        acc.iter_mut().for_each(|a| *a = [0; 4]);
+        for (dy, &wt) in wts.iter().enumerate() {
+            let row = &mid[(s0 + dy) * tw..(s0 + dy + 1) * tw];
+            for (a, p) in acc.iter_mut().zip(row) {
+                a[0] += p.r() as u32 * wt;
+                a[1] += p.g() as u32 * wt;
+                a[2] += p.b() as u32 * wt;
+                a[3] += p.a() as u32 * wt;
+            }
+        }
+        out.extend(acc.iter().map(|a| to_color(*a)));
+    }
+    ColorImage::new([tw, th], out)
+}
+
+fn to_color(acc: [u32; 4]) -> Color32 {
+    let c = |v: u32| ((v + 32768) >> 16).min(255) as u8;
+    Color32::from_rgba_premultiplied(c(acc[0]), c(acc[1]), c(acc[2]), c(acc[3]))
+}
+
+/// Averages `k`×`k` blocks (the right/bottom remainder is dropped).
+fn box_shrink(src: &[Color32], w: usize, h: usize, k: usize) -> Vec<Color32> {
+    let (ow, oh) = (w / k, h / k);
+    let area = (k * k) as u32;
+    let bytes: &[u8] = bytemuck::cast_slice(src);
+    let mut out = Vec::with_capacity(ow * oh);
+    // Column sums first (k rows added channel by channel, which vectorises),
+    // then each block of k columns.
+    let mut cols = vec![0u32; ow * k * 4];
+    for oy in 0..oh {
+        cols.iter_mut().for_each(|c| *c = 0);
+        for dy in 0..k {
+            let start = (oy * k + dy) * w * 4;
+            let row = &bytes[start..start + ow * k * 4];
+            for (c, b) in cols.iter_mut().zip(row) {
+                *c += *b as u32;
+            }
+        }
+        out.extend(cols.chunks_exact(k * 4).map(|block| {
+            let mut a = [0u32; 4];
+            for px in block.chunks_exact(4) {
+                a[0] += px[0];
+                a[1] += px[1];
+                a[2] += px[2];
+                a[3] += px[3];
+            }
+            let avg = |v: u32| ((v + area / 2) / area) as u8;
+            Color32::from_rgba_premultiplied(avg(a[0]), avg(a[1]), avg(a[2]), avg(a[3]))
+        }));
+    }
+    out
 }
 
 /// Rotates/mirrors pixels so they look upright (only for copying out).
@@ -361,17 +545,8 @@ pub fn shrink(img: &ColorImage, max_side: usize) -> ColorImage {
     if w.max(h) <= max_side {
         return img.clone();
     }
-    let rgba: Vec<u8> = img
-        .pixels
-        .iter()
-        .flat_map(|p| p.to_srgba_unmultiplied())
-        .collect();
-    let buf = image::RgbaImage::from_raw(w as u32, h as u32, rgba).expect("buffer size");
-    let small = fit_texture(DynamicImage::ImageRgba8(buf), max_side).into_rgba8();
-    ColorImage::from_rgba_unmultiplied(
-        [small.width() as usize, small.height() as usize],
-        small.as_raw(),
-    )
+    let t = gpu_target([w, h], max_side).expect("larger than max_side");
+    downscale(img, t)
 }
 
 pub fn has_alpha(img: &ColorImage) -> bool {
@@ -448,7 +623,7 @@ mod tests {
         let d = decode_bytes(
             &png_bytes(40, 20, [10, 200, 30, 255]),
             Path::new("a.png"),
-            8192,
+            DecodeOpts::full(8192),
         )
         .unwrap();
         assert_eq!((d.width, d.height), (40, 20));
@@ -465,7 +640,12 @@ mod tests {
             32,
             image::Rgb([200, 40, 40]),
         ));
-        let d = decode_bytes(&encoded(img, ImageFormat::Jpeg), Path::new("a.jpg"), 8192).unwrap();
+        let d = decode_bytes(
+            &encoded(img, ImageFormat::Jpeg),
+            Path::new("a.jpg"),
+            DecodeOpts::full(8192),
+        )
+        .unwrap();
         assert_eq!((d.width, d.height), (64, 32));
         assert_eq!(d.format, "JPEG");
         let p = d.frames[0].image.pixels[0];
@@ -474,7 +654,12 @@ mod tests {
 
     #[test]
     fn detects_alpha() {
-        let d = decode_bytes(&png_bytes(4, 4, [0, 0, 0, 10]), Path::new("a.png"), 8192).unwrap();
+        let d = decode_bytes(
+            &png_bytes(4, 4, [0, 0, 0, 10]),
+            Path::new("a.png"),
+            DecodeOpts::full(8192),
+        )
+        .unwrap();
         assert!(d.has_alpha);
     }
 
@@ -483,7 +668,7 @@ mod tests {
         let d = decode_bytes(
             &png_bytes(600, 300, [1, 2, 3, 255]),
             Path::new("a.png"),
-            256,
+            DecodeOpts::full(256),
         )
         .unwrap();
         assert_eq!((d.width, d.height), (600, 300));
@@ -492,8 +677,74 @@ mod tests {
     }
 
     #[test]
+    fn screen_quality_fits_the_screen_and_is_marked_reduced() {
+        let opts = DecodeOpts {
+            max_side: 8192,
+            fit: Some([100, 100]),
+        };
+        let d = decode_bytes(
+            &png_bytes(600, 300, [9, 9, 9, 255]),
+            Path::new("a.png"),
+            opts,
+        )
+        .unwrap();
+        assert_eq!((d.width, d.height), (600, 300));
+        assert_eq!(d.texture_size(), [100, 50]);
+        assert!(d.reduced);
+        // Already small enough: untouched and not reduced.
+        let d = decode_bytes(&png_bytes(80, 40, [9, 9, 9, 255]), Path::new("a.png"), opts).unwrap();
+        assert_eq!(d.texture_size(), [80, 40]);
+        assert!(!d.reduced);
+    }
+
+    #[test]
+    fn screen_target_respects_exif_rotation() {
+        let none = Orientation::default();
+        let cw = Orientation::from_exif(6);
+        // 32.5 MP camera file on a 2560x1440 screen.
+        assert_eq!(
+            screen_target([6960, 4640], [2560, 1440], none),
+            Some([2160, 1440])
+        );
+        // Stored landscape, shown portrait (960x1440 on screen).
+        assert_eq!(
+            screen_target([6960, 4640], [2560, 1440], cw),
+            Some([1440, 960])
+        );
+        // ...and on a portrait monitor it may use the full height.
+        assert_eq!(
+            screen_target([6960, 4640], [1440, 2560], cw),
+            Some([2160, 1440])
+        );
+        assert_eq!(screen_target([800, 600], [2560, 1440], none), None);
+        // Memory per image: 129 MB -> 12.4 MB.
+        assert_eq!(6960 * 4640 * 4 / 1_000_000, 129);
+        assert_eq!(2160 * 1440 * 4 / 100_000, 124);
+    }
+
+    #[test]
+    fn box_shrink_averages_blocks() {
+        // 4x2: left half white, right half black; halve to 2x1.
+        let w = Color32::WHITE;
+        let b = Color32::BLACK;
+        let img = ColorImage::new([4, 2], vec![w, w, b, b, w, w, b, b]);
+        let out = downscale(&img, [2, 1]);
+        assert_eq!(out.size, [2, 1]);
+        assert_eq!(out.pixels, vec![w, b]);
+        // Non-integer ratio still lands on the exact size.
+        let img = ColorImage::new([10, 7], vec![Color32::GRAY; 70]);
+        let out = downscale(&img, [3, 2]);
+        assert_eq!(out.size, [3, 2]);
+        assert!(
+            out.pixels.iter().all(|p| *p == Color32::GRAY),
+            "{:?}",
+            out.pixels
+        );
+    }
+
+    #[test]
     fn rejects_garbage() {
-        assert!(decode_bytes(b"hello", Path::new("x.txt"), 8192).is_err());
+        assert!(decode_bytes(b"hello", Path::new("x.txt"), DecodeOpts::full(8192)).is_err());
     }
 
     #[test]
@@ -554,22 +805,61 @@ mod tests {
         assert_eq!(shrink(&img, 1000).size, [400, 200]);
     }
 
-    /// `cargo test --release -- --ignored --nocapture bench_jpeg` with
-    /// MUUD_BENCH_JPEG=path/to/big.jpg
+    /// A photo-like test JPEG: smooth gradients plus sensor-style noise, so
+    /// the entropy decoder has real work (flat images decode unrealistically
+    /// fast).
+    pub(crate) fn synthetic_photo(w: u32, h: u32) -> Vec<u8> {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let n = (seed % 24) as i32 - 12;
+            let fx = x as f32 / w as f32;
+            let fy = y as f32 / h as f32;
+            let wave = ((fx * 37.0).sin() * (fy * 23.0).cos() * 40.0) as i32;
+            let c = |base: f32| (base as i32 + wave + n).clamp(0, 255) as u8;
+            image::Rgb([
+                c(60.0 + 150.0 * fx),
+                c(90.0 + 120.0 * fy),
+                c(200.0 - 140.0 * fx * fy),
+            ])
+        });
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92)
+            .encode_image(&img)
+            .unwrap();
+        out
+    }
+
+    /// `cargo test --release -- --ignored --nocapture bench_jpeg`, optionally
+    /// with MUUD_BENCH_JPEG=path/to/big.jpg (otherwise a synthetic 32.5 MP
+    /// file is used).
     #[test]
     #[ignore]
     fn bench_jpeg() {
-        let path = std::env::var("MUUD_BENCH_JPEG").expect("set MUUD_BENCH_JPEG");
-        let bytes = std::fs::read(&path).unwrap();
-        for _ in 0..3 {
-            let t = std::time::Instant::now();
-            let d = decode_bytes(&bytes, Path::new(&path), 16384).unwrap();
-            println!(
-                "{}x{} in {:.1} ms",
-                d.width,
-                d.height,
-                t.elapsed().as_secs_f64() * 1000.0
-            );
+        let (bytes, name) = match std::env::var("MUUD_BENCH_JPEG") {
+            Ok(p) => (std::fs::read(&p).unwrap(), p),
+            Err(_) => (synthetic_photo(6960, 4640), "synthetic.jpg".into()),
+        };
+        println!("{name}: {:.1} MB", bytes.len() as f64 / 1e6);
+        let screen = DecodeOpts {
+            max_side: 16384,
+            fit: Some([2560, 1440]),
+        };
+        for (label, opts) in [("full", DecodeOpts::full(16384)), ("screen", screen)] {
+            for _ in 0..3 {
+                let t = std::time::Instant::now();
+                let d = decode_bytes(&bytes, Path::new(&name), opts).unwrap();
+                let [tw, th] = d.texture_size();
+                println!(
+                    "{label:>6}: {}x{} -> texture {tw}x{th} ({:.1} MB) in {:.1} ms",
+                    d.width,
+                    d.height,
+                    d.bytes() as f64 / 1e6,
+                    t.elapsed().as_secs_f64() * 1000.0
+                );
+            }
         }
     }
 }

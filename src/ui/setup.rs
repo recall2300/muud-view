@@ -70,7 +70,9 @@ impl MuudApp {
                 d.format,
                 d.width,
                 d.height,
-                if d.is_downscaled() {
+                if d.reduced {
+                    "screen-size"
+                } else if d.is_downscaled() {
                     "downscaled"
                 } else {
                     "full"
@@ -82,8 +84,17 @@ impl MuudApp {
             (Some(p), None) => format!("{} — not decoded", p.display()),
             _ => "none".into(),
         };
+        let loader = self.lib.loader();
+        let pipeline = format!(
+            "{} decoders, texture limit {}, {} files read ahead, full-res current: {}, key held: {}",
+            loader.decoders(),
+            loader.max_texture_side(),
+            loader.read_cache_len(),
+            self.lib.current().is_some_and(|p| self.lib.has_full(p)),
+            self.lib.is_rapid(),
+        );
         format!(
-            "muud view {VERSION}\nOS: {} {}\nCPU threads: {}\nGPU max texture: {max_tex}\nScale: {ppp:.2}\nData folder: {}\nPortable: {}\nRegistered: {}\nCurrent: {current}\n\n--- log (last 30 lines) ---\n{}",
+            "muud view {VERSION}\nOS: {} {}\nCPU threads: {}\nGPU max texture: {max_tex}\nScale: {ppp:.2}\nPipeline: {pipeline}\nData folder: {}\nPortable: {}\nRegistered: {}\nCurrent: {current}\n\n--- log (last 30 lines) ---\n{}",
             std::env::consts::OS,
             std::env::consts::ARCH,
             std::thread::available_parallelism().map(|n| n.get()).unwrap_or(0),

@@ -74,10 +74,9 @@ impl MuudApp {
             );
             return;
         };
-        let Some(Slot::Ready(d)) = self.lib.get(&draw_path) else {
-            return;
-        };
-        let d = d.clone();
+        // Draw what the textures were made from (the cache may already hold
+        // a newer decode that is uploaded next frame).
+        let d = self.textures[&draw_path].src.clone();
 
         let ppp = ctx.pixels_per_point();
         let img = self.view.rotated(d.width as f32, d.height as f32);
@@ -184,6 +183,10 @@ impl MuudApp {
 
         self.view.offset = clamp_offset(self.view.offset, shown, rect.size());
         self.last_scale = scale;
+        // Zoomed past the screen-size pixels: load every pixel.
+        if cur.as_ref() == Some(&draw_path) && needs_more_pixels(&d, scale) {
+            self.lib.request_full();
+        }
         let can_pan = shown.x > rect.width() + 0.5 || shown.y > rect.height() + 0.5;
         if can_pan && resp.hovered() {
             ctx.set_cursor_icon(if resp.dragged() {
@@ -210,7 +213,7 @@ impl MuudApp {
             );
         }
 
-        let textures = &self.textures[&draw_path];
+        let textures = &self.textures[&draw_path].handles;
         let tex = &textures[self.frame_index.min(textures.len() - 1)];
         let mut mesh = Mesh::with_texture(tex.id());
         let uvs = compose_uvs(
@@ -332,5 +335,40 @@ impl MuudApp {
             yy = r.bottom() + 8.0;
         }
         let _ = x1;
+    }
+}
+
+/// True if the image is drawn with more screen pixels than its texture has
+/// and a full-resolution decode would add detail.
+pub fn needs_more_pixels(d: &crate::core::decode::Decoded, scale: f32) -> bool {
+    if !d.reduced {
+        return false;
+    }
+    let [tw, th] = d.texture_size();
+    let drawn = d.width.max(d.height) as f32 * scale;
+    drawn > tw.max(th) as f32 * 1.02
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::ColorImage;
+
+    #[test]
+    fn full_resolution_when_zoomed_past_screen_pixels() {
+        // 6960x4640 shown from a 2160x1440 screen texture.
+        let mut d = crate::core::decode::Decoded::from_color_image(
+            ColorImage::new([2160, 1440], vec![Color32::BLACK; 2160 * 1440]),
+            "JPEG",
+        );
+        d.width = 6960;
+        d.height = 4640;
+        d.reduced = true;
+        let fit = 1440.0 / 4640.0;
+        assert!(!needs_more_pixels(&d, fit));
+        assert!(needs_more_pixels(&d, fit * 1.5));
+        assert!(needs_more_pixels(&d, 1.0));
+        d.reduced = false;
+        assert!(!needs_more_pixels(&d, 1.0));
     }
 }

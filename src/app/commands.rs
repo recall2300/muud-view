@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Event, Vec2, ViewportCommand};
 
-use crate::app::MuudApp;
+use crate::app::{MuudApp, RAPID_GRACE};
 use crate::core::decode::{shrink, upright};
 use crate::core::folder;
 use crate::core::history::{Action, Undone};
@@ -138,9 +138,12 @@ impl MuudApp {
                 self.spawn_job(ctx, move || {
                     // Copy the original pixels, not the screen-sized texture.
                     let full = if !small && d.is_downscaled() && path.exists() {
-                        crate::core::loader::decode_file(&path, 1 << 15)
-                            .ok()
-                            .map(|f| upright(&f.frames[0].image, f.orientation))
+                        crate::core::loader::decode_file(
+                            &path,
+                            crate::core::decode::DecodeOpts::full(1 << 15),
+                        )
+                        .ok()
+                        .map(|f| upright(&f.frames[0].image, f.orientation))
                     } else {
                         None
                     };
@@ -337,7 +340,7 @@ impl MuudApp {
     }
 
     pub(crate) fn handle_keys(&mut self, ctx: &egui::Context) {
-        let presses: Vec<(egui::Key, egui::Modifiers)> = ctx.input(|i| {
+        let presses: Vec<(egui::Key, egui::Modifiers, bool)> = ctx.input(|i| {
             i.events
                 .iter()
                 .filter_map(|e| match e {
@@ -345,13 +348,14 @@ impl MuudApp {
                         key,
                         pressed: true,
                         modifiers,
+                        repeat,
                         ..
-                    } => Some((*key, *modifiers)),
+                    } => Some((*key, *modifiers, *repeat)),
                     _ => None,
                 })
                 .collect()
         });
-        for (key, mods) in presses {
+        for (key, mods, repeat) in presses {
             if self.confirm_delete {
                 match key {
                     egui::Key::Enter | egui::Key::Y => {
@@ -438,6 +442,11 @@ impl MuudApp {
                 }
             }
             if let Some(cmd) = self.keymap.lookup(key, mods) {
+                if repeat && matches!(cmd, Cmd::Next | Cmd::Prev | Cmd::Forward10 | Cmd::Back10) {
+                    // Key held down: skip decoding the images flown past.
+                    self.rapid_until = Some(Instant::now() + RAPID_GRACE);
+                    self.lib.set_rapid(true);
+                }
                 self.run(ctx, cmd);
             }
         }

@@ -1,11 +1,18 @@
 //! The open folder: file list, current position, decoded-image cache and
 //! prefetching. No UI code here, so it is tested directly.
+//!
+//! Images are cached at screen size ([`Quality::Screen`]). Only the current
+//! image is ever held at full resolution, and only once the view needs it
+//! (zoomed in past the screen-size pixels).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::loader::{Decoded, Loader};
+use super::loader::{Decoded, Job, Loader, Quality};
+
+/// How many files ahead (in the direction of travel) are read into memory.
+pub const READ_AHEAD: usize = 10;
 
 pub enum Slot {
     Ready(Arc<Decoded>),
@@ -36,6 +43,12 @@ pub struct Library {
     cache: HashMap<PathBuf, Slot>,
     lru: VecDeque<PathBuf>,
     budget: usize,
+    /// The current image at full resolution, once asked for.
+    full: Option<(PathBuf, Arc<Decoded>)>,
+    want_full: Option<PathBuf>,
+    /// A navigation key is being held: decode only where we are now, so the
+    /// images flown past are skipped instead of queued.
+    rapid: bool,
     loader: Loader,
 }
 
@@ -48,6 +61,9 @@ impl Library {
             cache: HashMap::new(),
             lru: VecDeque::new(),
             budget,
+            full: None,
+            want_full: None,
+            rapid: false,
             loader,
         }
     }
@@ -60,13 +76,17 @@ impl Library {
         self.files = files;
         self.index = index.min(self.files.len().saturating_sub(1));
         self.direction = 1;
+        self.drop_full_unless_current();
         self.request();
     }
 
     pub fn clear(&mut self) {
         self.files.clear();
         self.index = 0;
+        self.full = None;
+        self.want_full = None;
         self.loader.want(Vec::new());
+        self.loader.read_ahead(Vec::new());
     }
 
     pub fn is_empty(&self) -> bool {
@@ -81,28 +101,75 @@ impl Library {
         self.files.get(self.index)
     }
 
+    /// Screen-quality slot (or the failure) for `path`.
     pub fn get(&self, path: &Path) -> Option<&Slot> {
         self.cache.get(path)
     }
 
-    pub fn current_decoded(&self) -> Option<&Arc<Decoded>> {
-        match self.cache.get(self.current()?) {
+    /// The best decoded image for `path`: full resolution if loaded.
+    pub fn best(&self, path: &Path) -> Option<&Arc<Decoded>> {
+        if let Some((p, d)) = &self.full {
+            if p == path {
+                return Some(d);
+            }
+        }
+        match self.cache.get(path) {
             Some(Slot::Ready(d)) => Some(d),
             _ => None,
         }
     }
 
+    pub fn current_decoded(&self) -> Option<&Arc<Decoded>> {
+        self.best(self.current()?)
+    }
+
+    pub fn is_rapid(&self) -> bool {
+        self.rapid
+    }
+
+    /// Turns "key held down" mode on or off.
+    pub fn set_rapid(&mut self, rapid: bool) {
+        if self.rapid != rapid {
+            self.rapid = rapid;
+            self.request();
+        }
+    }
+
     /// Files worth having decoded, most important first: the current one,
     /// two ahead in the direction of travel, one behind, then one more ahead.
+    /// While a key is held only the current one.
     pub fn wanted(&self) -> Vec<PathBuf> {
         if self.files.is_empty() {
             return Vec::new();
         }
+        if self.rapid {
+            return vec![self.files[self.index].clone()];
+        }
+        self.around(&[0, 1, 2, -1, 3])
+    }
+
+    /// Files whose bytes should be in memory: the current one, the next
+    /// [`READ_AHEAD`] in the direction of travel and two behind.
+    pub fn read_list(&self) -> Vec<PathBuf> {
+        if self.files.is_empty() {
+            return Vec::new();
+        }
+        if self.rapid {
+            return vec![self.files[self.index].clone()];
+        }
+        let mut steps: Vec<i64> = (0..=READ_AHEAD as i64).collect();
+        steps.extend([-1, -2]);
+        self.around(&steps)
+    }
+
+    /// Files at the given offsets from the current one (positive = the
+    /// direction of travel), skipping ones past either end.
+    fn around(&self, steps: &[i64]) -> Vec<PathBuf> {
         let i = self.index as i64;
         let d = if self.direction < 0 { -1 } else { 1 };
         let mut out = Vec::new();
-        for k in [0, d, 2 * d, -d, 3 * d] {
-            let j = i + k;
+        for k in steps {
+            let j = i + k * d;
             if j >= 0 && (j as usize) < self.files.len() {
                 let p = &self.files[j as usize];
                 if !out.contains(p) {
@@ -113,29 +180,90 @@ impl Library {
         out
     }
 
-    /// Asks the loader for whatever is wanted and not cached yet.
-    pub fn request(&self) {
-        let todo: Vec<PathBuf> = self
+    /// Decode jobs for whatever is wanted and not cached yet. A wanted full
+    /// decode comes right after the current image.
+    pub fn jobs(&self) -> Vec<Job> {
+        let mut jobs: Vec<Job> = self
             .wanted()
             .into_iter()
             .filter(|p| !self.cache.contains_key(p))
+            .map(Job::screen)
             .collect();
-        self.loader.want(todo);
+        if let Some(p) = &self.want_full {
+            if self.full.as_ref().map(|(f, _)| f) != Some(p) {
+                // Right after the current image's own screen decode, if that
+                // is still pending; otherwise first.
+                let at = usize::from(jobs.first().is_some_and(|j| &j.path == p));
+                jobs.insert(at, Job::full(p.clone()));
+            }
+        }
+        jobs
+    }
+
+    /// Asks the loader for whatever is wanted and not cached yet.
+    pub fn request(&self) {
+        self.loader.want(self.jobs());
+        self.loader.read_ahead(self.read_list());
+    }
+
+    /// Asks for the current image at full resolution, if the cached one was
+    /// shrunk for the screen. Returns true if a new decode was started.
+    pub fn request_full(&mut self) -> bool {
+        let Some(cur) = self.current().cloned() else {
+            return false;
+        };
+        if self.want_full.as_ref() == Some(&cur) {
+            return false;
+        }
+        let reduced = matches!(self.cache.get(&cur), Some(Slot::Ready(d)) if d.reduced);
+        if !reduced {
+            return false;
+        }
+        self.want_full = Some(cur);
+        self.request();
+        true
+    }
+
+    /// A full-resolution decode was asked for and has not arrived yet.
+    pub fn full_pending(&self) -> bool {
+        self.want_full.is_some() && self.full.as_ref().map(|(p, _)| p) != self.want_full.as_ref()
+    }
+
+    pub fn has_full(&self, path: &Path) -> bool {
+        self.full.as_ref().is_some_and(|(p, _)| p == path)
+    }
+
+    fn drop_full_unless_current(&mut self) {
+        let cur = self.current().cloned();
+        if self.full.as_ref().map(|(p, _)| p) != cur.as_ref() {
+            self.full = None;
+        }
+        if self.want_full != cur {
+            self.want_full = None;
+        }
     }
 
     /// Collects finished decodes. Returns true if anything arrived.
     pub fn poll(&mut self) -> bool {
         let results = self.loader.poll();
         let got = !results.is_empty();
-        for (path, result) in results {
-            let slot = match result {
-                Ok(d) => Slot::Ready(d),
-                Err(e) => {
-                    super::log::error(&format!("decode {}: {e}", path.display()));
-                    Slot::Failed(e)
+        for done in results {
+            match (done.quality, done.result) {
+                (Quality::Screen, Ok(d)) => self.insert(done.path, Slot::Ready(d)),
+                (Quality::Screen, Err(e)) => {
+                    super::log::error(&format!("decode {}: {e}", done.path.display()));
+                    self.insert(done.path, Slot::Failed(e));
                 }
-            };
-            self.insert(path, slot);
+                (Quality::Full, Ok(d)) => {
+                    if self.want_full.as_ref() == Some(&done.path) {
+                        self.full = Some((done.path, d));
+                    }
+                }
+                (Quality::Full, Err(e)) => {
+                    // Keep showing the screen-size image.
+                    super::log::error(&format!("full decode {}: {e}", done.path.display()));
+                }
+            }
         }
         if got {
             self.evict();
@@ -167,6 +295,29 @@ impl Library {
         self.lru = keep;
     }
 
+    /// What to draw while the current image is still decoding: the current
+    /// one if ready, otherwise the ready image closest to it among those
+    /// between `shown` and the current one. Holding a key down therefore
+    /// shows whatever finished along the way instead of freezing.
+    pub fn nearest_ready(&self, shown: Option<&Path>) -> Option<PathBuf> {
+        let cur = self.current()?;
+        if self.best(cur).is_some() {
+            return Some(cur.clone());
+        }
+        let from = self.files.iter().position(|p| Some(p.as_path()) == shown)?;
+        let to = self.index;
+        let between: Vec<usize> = if from < to {
+            (from + 1..to).rev().collect()
+        } else {
+            (to + 1..from).collect()
+        };
+        between
+            .into_iter()
+            .map(|i| &self.files[i])
+            .find(|p| matches!(self.cache.get(*p), Some(Slot::Ready(_))))
+            .cloned()
+    }
+
     /// Moves to `i` (clamped). Returns true if the position changed.
     pub fn go_to(&mut self, i: usize) -> bool {
         if self.files.is_empty() {
@@ -178,6 +329,7 @@ impl Library {
         }
         self.direction = if i > self.index { 1 } else { -1 };
         self.index = i;
+        self.drop_full_unless_current();
         self.request();
         self.evict();
         true
@@ -207,6 +359,7 @@ impl Library {
         self.cache.remove(&path);
         self.lru.retain(|p| p != &path);
         self.index = at.min(self.files.len().saturating_sub(1));
+        self.drop_full_unless_current();
         self.request();
         Some((path, at))
     }
@@ -216,6 +369,7 @@ impl Library {
         let at = at.min(self.files.len());
         self.files.insert(at, path);
         self.index = at;
+        self.drop_full_unless_current();
         self.request();
     }
 
@@ -231,6 +385,14 @@ impl Library {
             if p == old {
                 *p = new.clone();
             }
+        }
+        if let Some((p, _)) = &mut self.full {
+            if p == old {
+                *p = new.clone();
+            }
+        }
+        if self.want_full.as_deref() == Some(old) {
+            self.want_full = Some(new);
         }
     }
 
@@ -345,6 +507,98 @@ mod tests {
         let new = dir.join("renamed.png");
         lib.replace_path(&old, new.clone());
         assert_eq!(lib.current(), Some(&new));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn names(paths: &[PathBuf]) -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| crate::core::folder::file_name(p))
+            .collect()
+    }
+
+    #[test]
+    fn reads_ten_ahead_in_the_direction_of_travel() {
+        let (mut lib, dir) = lib_with(30);
+        lib.go_to(5);
+        let r = names(&lib.read_list());
+        assert_eq!(r.len(), 13);
+        assert_eq!(r[0], "05.png");
+        assert_eq!(r[10], "15.png");
+        assert_eq!(&r[11..], ["04.png", "03.png"]);
+        lib.go_to(4);
+        let r = names(&lib.read_list());
+        assert_eq!(&r[..3], ["04.png", "03.png", "02.png"]);
+        // Clipped at the start of the folder.
+        assert!(!r.iter().any(|n| n.starts_with('-')));
+        assert_eq!(r.len(), 7); // 04..00 and 05, 06
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn holding_a_key_skips_the_images_in_between() {
+        let (mut lib, dir) = lib_with(10);
+        let first = lib.files[0].clone();
+        wait_for(&mut lib, &first);
+        lib.set_rapid(true);
+        for _ in 0..6 {
+            lib.step(1);
+            // Only where we are now is decoded or read.
+            assert_eq!(lib.wanted(), vec![lib.files[lib.index].clone()]);
+            assert_eq!(lib.read_list(), lib.wanted());
+        }
+        lib.set_rapid(false);
+        assert_eq!(lib.wanted().len(), 5);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn nearest_ready_shows_progress_while_flying_past() {
+        let (mut lib, dir) = lib_with(8);
+        let shown = lib.files[0].clone();
+        wait_for(&mut lib, &shown);
+        let three = lib.files[3].clone();
+        lib.go_to(3);
+        wait_for(&mut lib, &three);
+        lib.go_to(6);
+        // 6 may or may not be decoded yet; force "not yet" by asking about
+        // an image whose decode we drop.
+        lib.cache.remove(&lib.files[6].clone());
+        lib.cache.remove(&lib.files[5].clone());
+        lib.cache.remove(&lib.files[4].clone());
+        assert_eq!(lib.nearest_ready(Some(&shown)), Some(three.clone()));
+        // Nothing between: keep what is shown.
+        assert_eq!(lib.nearest_ready(Some(&lib.files[5].clone())), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn full_resolution_only_for_the_current_reduced_image() {
+        let (mut lib, dir) = lib_with(3);
+        let first = lib.files[0].clone();
+        wait_for(&mut lib, &first);
+        // A 4x4 image is never shrunk, so there is nothing more to load.
+        assert!(!lib.request_full());
+        // Pretend it was shrunk for the screen.
+        let mut d = crate::core::decode::Decoded::from_color_image(
+            eframe::egui::ColorImage::new([2, 2], vec![eframe::egui::Color32::RED; 4]),
+            "PNG",
+        );
+        d.reduced = true;
+        lib.insert_decoded(first.clone(), Arc::new(d));
+        assert!(lib.request_full());
+        assert!(!lib.request_full(), "asked once");
+        assert_eq!(lib.jobs()[0], Job::full(first.clone()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !lib.has_full(&first) && Instant::now() < deadline {
+            lib.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(lib.has_full(&first));
+        assert_eq!(lib.current_decoded().unwrap().texture_size(), [4, 4]);
+        // Moving on frees it.
+        lib.go_to(1);
+        assert!(!lib.has_full(&first));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

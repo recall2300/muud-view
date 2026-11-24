@@ -25,6 +25,15 @@ pub const TOP_BAR: f32 = 40.0;
 pub const BOTTOM_BAR: f32 = 48.0;
 pub const INFO_W: f32 = 340.0;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// How long after the last key repeat "key held down" mode lasts.
+pub const RAPID_GRACE: Duration = Duration::from_millis(200);
+
+/// GPU textures for one image, and the decode they came from (so a newer
+/// decode of the same file, e.g. full resolution, replaces them).
+pub(crate) struct Tex {
+    pub src: std::sync::Arc<crate::core::decode::Decoded>,
+    pub handles: Vec<TextureHandle>,
+}
 
 /// Debug/README helper: `MUUD_SCREENSHOT=out.png` saves the window and exits.
 struct ScreenshotJob {
@@ -36,7 +45,7 @@ struct ScreenshotJob {
 pub struct MuudApp {
     pub(crate) settings: Settings,
     pub(crate) lib: Library,
-    pub(crate) textures: HashMap<PathBuf, Vec<TextureHandle>>,
+    pub(crate) textures: HashMap<PathBuf, Tex>,
     /// The image currently drawn (may lag behind `lib.current()` while the
     /// next one decodes).
     pub(crate) shown: Option<PathBuf>,
@@ -69,6 +78,8 @@ pub struct MuudApp {
     pub(crate) rename: Option<String>,
     pub(crate) zoom_locked: bool,
     pub(crate) edge_accum: f32,
+    /// A navigation key is held down until this moment.
+    pub(crate) rapid_until: Option<Instant>,
     pointer_moved_at: Instant,
     bar_visible_top: f32,
     remembered: Option<PathBuf>,
@@ -103,6 +114,14 @@ impl MuudApp {
             settings.lang = if has("en") { Lang::En } else { Lang::Ko };
         }
         let show_settings = has("settings");
+        let start_view = View {
+            mode: if has("zoom100") {
+                ZoomMode::Original
+            } else {
+                ZoomMode::Fit
+            },
+            ..View::default()
+        };
         let settings_tab = if has("keys") {
             crate::ui::settings_window::Tab::Keys
         } else {
@@ -113,11 +132,11 @@ impl MuudApp {
         install_fonts(&cc.egui_ctx);
         apply_style(&cc.egui_ctx);
         let keymap = crate::core::keymap::Keymap::with_overrides(&settings.key_overrides);
+        // One decoder per core; reading runs on its own thread.
         let threads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4)
-            .clamp(3, 8)
-            - 1;
+            .clamp(2, 16);
         let screenshot = std::env::var_os("MUUD_SCREENSHOT").map(|p| ScreenshotJob {
             path: PathBuf::from(p),
             frames: 0,
@@ -128,7 +147,7 @@ impl MuudApp {
             lib: Library::new(Loader::new(cc.egui_ctx.clone(), threads), CACHE_BUDGET),
             textures: HashMap::new(),
             shown: None,
-            view: View::default(),
+            view: start_view,
             last_scale: 1.0,
             last_canvas: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
             frame_index: 0,
@@ -154,6 +173,7 @@ impl MuudApp {
             rename: None,
             zoom_locked: false,
             edge_accum: 0.0,
+            rapid_until: None,
             pointer_moved_at: Instant::now(),
             bar_visible_top: 0.0,
             remembered: None,
@@ -379,13 +399,17 @@ impl MuudApp {
         }
     }
 
+    /// Uploads the best decode of `path`, replacing older textures of it.
+    /// Returns true if anything was uploaded.
     fn upload(&mut self, ctx: &egui::Context, path: &Path) -> bool {
-        if self.textures.contains_key(path) {
-            return false;
-        }
-        let Some(crate::core::library::Slot::Ready(d)) = self.lib.get(path) else {
+        let Some(d) = self.lib.best(path).cloned() else {
             return false;
         };
+        if let Some(t) = self.textures.get(path) {
+            if std::sync::Arc::ptr_eq(&t.src, &d) {
+                return false;
+            }
+        }
         let opts = self.texture_options();
         let name = path.display().to_string();
         let handles = d
@@ -393,24 +417,26 @@ impl MuudApp {
             .iter()
             .map(|f| ctx.load_texture(name.clone(), f.image.clone(), opts))
             .collect();
-        self.textures.insert(path.to_path_buf(), handles);
+        self.textures
+            .insert(path.to_path_buf(), Tex { src: d, handles });
         true
     }
 
     fn ensure_textures(&mut self, ctx: &egui::Context) {
         let wanted = self.lib.wanted();
-        let Some(cur) = wanted.first().cloned() else {
-            return;
-        };
-        let ready = self.upload(ctx, &cur) || self.textures.contains_key(&cur);
-        if ready && self.shown.as_ref() != Some(&cur) {
-            self.shown = Some(cur.clone());
-            self.frame_index = 0;
-            self.next_frame_at = None;
+        // The current image, or while it decodes the closest one that is
+        // ready (so holding a key shows the images it flies past).
+        if let Some(target) = self.lib.nearest_ready(self.shown.as_deref()) {
+            self.upload(ctx, &target);
+            if self.shown.as_ref() != Some(&target) {
+                self.shown = Some(target);
+                self.frame_index = 0;
+                self.next_frame_at = None;
+            }
         }
         // Pre-upload one neighbour per frame so switching is instant.
         for p in wanted.iter().skip(1) {
-            if self.upload(ctx, p) {
+            if !self.textures.contains_key(p) && self.upload(ctx, p) {
                 ctx.request_repaint();
                 break;
             }
@@ -419,6 +445,39 @@ impl MuudApp {
         let shown = self.shown.clone();
         self.textures
             .retain(|p, _| wanted.contains(p) || Some(p) == shown.as_ref());
+    }
+
+    /// Ends "key held down" mode a moment after the last key repeat.
+    fn update_rapid(&mut self, ctx: &egui::Context) {
+        if let Some(until) = self.rapid_until {
+            let now = Instant::now();
+            if now >= until {
+                self.rapid_until = None;
+                self.lib.set_rapid(false);
+            } else {
+                ctx.request_repaint_after(until - now);
+            }
+        }
+    }
+
+    /// Tells the loader how big "screen size" is: the monitor, so resizing
+    /// the window or going fullscreen does not need a new decode.
+    fn update_screen_size(&self, ctx: &egui::Context) {
+        let (monitor, content, ppp) = ctx.input(|i| {
+            (
+                i.viewport().monitor_size,
+                i.content_rect().size(),
+                i.pixels_per_point(),
+            )
+        });
+        let size = monitor
+            .filter(|m| m.x > 0.0 && m.y > 0.0)
+            .unwrap_or(content)
+            .max(content);
+        self.lib.loader().set_screen_size([
+            (size.x * ppp).round() as usize,
+            (size.y * ppp).round() as usize,
+        ]);
     }
 
     // -----------------------------------------------------------------------
@@ -471,7 +530,7 @@ impl MuudApp {
         };
         job.frames += 1;
         // Wait until the first image is on screen (or a few seconds pass).
-        let ready = self.lib.is_empty() || self.shown.is_some();
+        let ready = self.lib.is_empty() || (self.shown.is_some() && !self.lib.full_pending());
         if !job.requested && ((ready && job.frames > 20) || job.frames > 600) {
             job.requested = true;
             let path = job.path.clone();
@@ -500,18 +559,21 @@ impl eframe::App for MuudApp {
             // The real texture limit is only known once the renderer runs.
             let side = ctx.input(|i| i.max_texture_side).clamp(2048, 16384);
             self.lib.loader().set_max_texture_side(side);
+            self.update_screen_size(&ctx);
             self.started = true;
             if let Some(p) = self.pending_open.take() {
                 self.open(&p);
             }
         }
 
+        self.update_screen_size(&ctx);
         self.lib.poll();
         self.poll_jobs();
         self.poll_incoming(&ctx);
         self.handle_drops(&ctx);
         self.handle_keys(&ctx);
         self.tick(&ctx);
+        self.update_rapid(&ctx);
         self.ensure_textures(&ctx);
         self.update_title(&ctx);
         self.remember_position();
