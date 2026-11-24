@@ -56,6 +56,9 @@ pub struct MuudApp {
     pub(crate) open_error: Option<String>,
     pub(crate) bars: BarState,
     pub(crate) history: crate::core::history::History,
+    /// Messages from background jobs (e.g. clipboard writes), shown as toasts.
+    pub(crate) jobs: Vec<std::sync::mpsc::Receiver<String>>,
+    pub(crate) paste_count: u32,
     title: String,
     started: bool,
     pending_open: Option<PathBuf>,
@@ -106,6 +109,8 @@ impl MuudApp {
             open_error: None,
             bars: BarState::default(),
             history: Default::default(),
+            jobs: Vec::new(),
+            paste_count: 0,
             title: String::new(),
             started: false,
             pending_open: initial,
@@ -179,6 +184,53 @@ impl MuudApp {
         }
         self.reset_view();
         Some(removed)
+    }
+
+    /// Runs `job` on a thread; its returned message becomes a toast.
+    pub(crate) fn spawn_job(
+        &mut self,
+        ctx: &egui::Context,
+        job: impl FnOnce() -> String + Send + 'static,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(job());
+            ctx.request_repaint();
+        });
+        self.jobs.push(rx);
+    }
+
+    fn poll_jobs(&mut self) {
+        let mut done = Vec::new();
+        self.jobs.retain(|rx| match rx.try_recv() {
+            Ok(msg) => {
+                done.push(msg);
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(_) => false,
+        });
+        for msg in done {
+            self.notify(msg);
+        }
+    }
+
+    /// Shows an image that came from the clipboard.
+    pub(crate) fn show_pasted(&mut self, image: egui::ColorImage) {
+        self.paste_count += 1;
+        let label = PathBuf::from(format!(
+            "clipboard-{}-{}.png",
+            chrono::Local::now().format("%H%M%S"),
+            self.paste_count
+        ));
+        let decoded = crate::core::decode::Decoded::from_color_image(image, "CLIPBOARD");
+        // Cache first, so the loader never tries to read this non-file.
+        self.lib
+            .insert_decoded(label.clone(), std::sync::Arc::new(decoded));
+        self.lib.set_files(vec![label], 0);
+        self.open_error = None;
+        self.reset_view();
     }
 
     pub(crate) fn notify(&mut self, text: impl Into<String>) {
@@ -314,6 +366,7 @@ impl eframe::App for MuudApp {
         }
 
         self.lib.poll();
+        self.poll_jobs();
         self.handle_drops(&ctx);
         self.handle_keys(&ctx);
         self.tick(&ctx);

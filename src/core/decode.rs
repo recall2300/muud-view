@@ -94,7 +94,6 @@ impl Decoded {
     }
 
     /// A still image wrapped as `Decoded` (used for pasted images).
-    #[allow(dead_code)] // wired up in M4
     pub fn from_color_image(image: ColorImage, format: &'static str) -> Self {
         let [w, h] = image.size;
         let histogram = histogram_of(&image);
@@ -357,7 +356,6 @@ pub fn upright(img: &ColorImage, o: Orientation) -> ColorImage {
 }
 
 /// Downscales so the longer side is at most `max_side` (for "copy resized").
-#[allow(dead_code)] // wired up in M4
 pub fn shrink(img: &ColorImage, max_side: usize) -> ColorImage {
     let [w, h] = img.size;
     if w.max(h) <= max_side {

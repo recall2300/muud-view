@@ -1,4 +1,6 @@
-//! OS integration: file dialogs, Explorer, Recycle Bin.
+//! OS integration: file dialogs, Explorer, Recycle Bin, clipboard.
+
+pub mod clipboard;
 
 use std::path::{Path, PathBuf};
 

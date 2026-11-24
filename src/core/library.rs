@@ -217,7 +217,6 @@ impl Library {
     }
 
     /// Adds a decoded image that did not come from the loader (e.g. pasted).
-    #[allow(dead_code)] // wired up in M4
     pub fn insert_decoded(&mut self, path: PathBuf, decoded: Arc<Decoded>) {
         self.insert(path, Slot::Ready(decoded));
     }

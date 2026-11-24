@@ -39,6 +39,9 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
+        // Ctrl+C / Ctrl+Insert / Shift+Insert / Shift+Delete are viewer
+        // shortcuts here, not text-editing clipboard commands.
+        clipboard_shortcuts: false,
         // The screenshot helper must not restore a saved window size.
         persist_window: std::env::var_os("MUUD_SCREENSHOT").is_none(),
         ..Default::default()

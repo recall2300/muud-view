@@ -46,6 +46,8 @@ pub enum Cmd {
     Help,
     PinTop,
     PinBottom,
+    CopyResized,
+    Paste,
     CopyToFolder(u8),
     MoveToFolder(u8),
     Undo,
@@ -82,6 +84,11 @@ const CTRL_SHIFT: Mods = Mods {
     ctrl: true,
     shift: true,
     alt: false,
+};
+const CTRL_ALT: Mods = Mods {
+    ctrl: true,
+    shift: false,
+    alt: true,
 };
 const CTRL_ALT_SHIFT: Mods = Mods {
     ctrl: true,
@@ -146,6 +153,7 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
             K::M => FlipH,
             K::F => FlipV,
             K::C => CopyImage,
+            K::V => Paste,
             K::Enter => ShowInExplorer,
             K::Insert => MoveToFolder(1),
             K::Z => Undo,
@@ -191,6 +199,11 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
     } else if is(CTRL_SHIFT) {
         match key {
             K::C => CopyExif,
+            _ => return None,
+        }
+    } else if is(CTRL_ALT) {
+        match key {
+            K::C => CopyResized,
             _ => return None,
         }
     } else if is(CTRL_ALT_SHIFT) {
@@ -256,7 +269,9 @@ pub const HELP: &[HelpSection] = &[
         "FILE",
         &[
             ("CTRL+O  F2 / F", "OPEN FILE / FOLDER"),
-            ("CTRL+C", "COPY IMAGE"),
+            ("CTRL+C", "COPY IMAGE + FILE"),
+            ("CTRL+ALT+C", "COPY SMALL (1600 PX)"),
+            ("CTRL+V", "VIEW CLIPBOARD"),
             ("CTRL+SHIFT+C", "COPY EXIF"),
             ("CTRL+ALT+SHIFT+C", "COPY PATH"),
             ("CTRL+ENTER", "SHOW IN EXPLORER"),

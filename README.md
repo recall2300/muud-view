@@ -58,7 +58,8 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 전체화면 / 최대화 | `Enter` `F11` 가운데 클릭 / `M` 더블클릭 |
 | 회전 / 뒤집기 | `Ctrl+R` `Ctrl+L` `Alt+방향키` / `Ctrl+M` `Ctrl+F` |
 | 정보 패널 | `Tab` |
-| 복사: 이미지 / EXIF / 경로 | `Ctrl+C` / `Ctrl+Shift+C` / `Ctrl+Alt+Shift+C` |
+| 복사: 이미지+파일 / 작게 / EXIF / 경로 | `Ctrl+C` / `Ctrl+Alt+C` / `Ctrl+Shift+C` / `Ctrl+Alt+Shift+C` |
+| 클립보드 이미지 보기 | `Ctrl+V` |
 | 휴지통 / 완전 삭제 | `Delete` / `Shift+Delete` (확인 후) |
 | 사진보관함 | `Insert` 1번에 복사, `Ctrl+Insert` 1번으로 이동, `Shift+Insert` 2번에 복사, `Alt+1~9` |
 | 되돌리기 (이동·삭제·복사) | `Ctrl+Z` |

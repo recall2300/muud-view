@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, Event, Vec2, ViewportCommand};
 
 use crate::app::MuudApp;
-use crate::core::decode::upright;
+use crate::core::decode::{shrink, upright};
+use crate::core::folder;
 use crate::core::history::{Action, Undone};
 use crate::core::keymap::{command_for, Cmd};
 use crate::core::photo_folders;
@@ -118,20 +119,67 @@ impl MuudApp {
             Cmd::FlipH => self.view.flip_h = !self.view.flip_h,
             Cmd::FlipV => self.view.flip_v = !self.view.flip_v,
             Cmd::ToggleInfo => self.settings.show_info = !self.settings.show_info,
-            Cmd::CopyImage => {
-                if let Some(d) = self.lib.current_decoded().cloned() {
-                    let frame = d.frames[self.frame_index.min(d.frames.len() - 1)]
-                        .image
-                        .clone();
-                    let downscaled = d.is_downscaled();
-                    ctx.copy_image(upright(&frame, d.orientation));
-                    self.notify(if downscaled {
-                        "IMAGE COPIED (DOWNSCALED)"
+            Cmd::CopyImage | Cmd::CopyResized => {
+                let (Some(d), Some(path)) = (
+                    self.lib.current_decoded().cloned(),
+                    self.lib.current().cloned(),
+                ) else {
+                    return;
+                };
+                let frame = d.frames[self.frame_index.min(d.frames.len() - 1)]
+                    .image
+                    .clone();
+                let small = cmd == Cmd::CopyResized;
+                self.notify(if small {
+                    "COPYING SMALL …"
+                } else {
+                    "COPYING …"
+                });
+                self.spawn_job(ctx, move || {
+                    // Copy the original pixels, not the screen-sized texture.
+                    let full = if !small && d.is_downscaled() && path.exists() {
+                        crate::core::loader::decode_file(&path, 1 << 15)
+                            .ok()
+                            .map(|f| upright(&f.frames[0].image, f.orientation))
                     } else {
-                        "IMAGE COPIED"
-                    });
-                }
+                        None
+                    };
+                    let mut img = full.unwrap_or_else(|| upright(&frame, d.orientation));
+                    if small {
+                        img = shrink(&img, 1600);
+                    }
+                    let files: Vec<PathBuf> = if !small && path.exists() {
+                        vec![path]
+                    } else {
+                        Vec::new()
+                    };
+                    match platform::clipboard::write(Some(&img), &files) {
+                        Ok(()) if small => format!("COPIED {} × {}", img.size[0], img.size[1]),
+                        Ok(()) if !files.is_empty() => {
+                            format!("COPIED {} × {} + FILE", img.size[0], img.size[1])
+                        }
+                        Ok(()) => format!("COPIED {} × {}", img.size[0], img.size[1]),
+                        Err(e) => format!("COPY FAILED: {e}"),
+                    }
+                });
             }
+            Cmd::Paste => match platform::clipboard::read() {
+                platform::clipboard::Pasted::Files(files) => {
+                    match files.iter().find(|f| f.is_dir() || folder::is_image(f)) {
+                        Some(f) => {
+                            let f = f.clone();
+                            self.open(&f);
+                        }
+                        None => self.notify("NO IMAGE ON THE CLIPBOARD"),
+                    }
+                }
+                platform::clipboard::Pasted::Image(img) => {
+                    let [w, h] = img.size;
+                    self.show_pasted(img);
+                    self.notify(format!("PASTED {w} × {h}"));
+                }
+                platform::clipboard::Pasted::Nothing => self.notify("NO IMAGE ON THE CLIPBOARD"),
+            },
             Cmd::CopyPath => {
                 if let Some(p) = self.lib.current().cloned() {
                     ctx.copy_text(p.display().to_string());
