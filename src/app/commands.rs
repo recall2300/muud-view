@@ -119,6 +119,14 @@ impl MuudApp {
             Cmd::FlipH => self.view.flip_h = !self.view.flip_h,
             Cmd::FlipV => self.view.flip_v = !self.view.flip_v,
             Cmd::ToggleInfo => self.settings.show_info = !self.settings.show_info,
+            Cmd::Minimap => {
+                self.settings.minimap = !self.settings.minimap;
+                self.notify(if self.settings.minimap {
+                    "MINIMAP ON"
+                } else {
+                    "MINIMAP OFF"
+                });
+            }
             Cmd::CopyImage | Cmd::CopyResized => {
                 let (Some(d), Some(path)) = (
                     self.lib.current_decoded().cloned(),

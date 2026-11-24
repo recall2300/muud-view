@@ -214,6 +214,31 @@ pub fn place_part(dest: [Pos2; 4], uvs: [Pos2; 4], part: Rect) -> [Pos2; 4] {
     ]
 }
 
+/// The part of the drawn image that is on screen, in 0..1 of the image as
+/// drawn (upright, after rotation), for the minimap.
+pub fn visible_part(dest: Rect, canvas: Rect) -> Rect {
+    let v = dest.intersect(canvas);
+    let n = |p: Pos2| {
+        pos2(
+            ((p.x - dest.min.x) / dest.width()).clamp(0.0, 1.0),
+            ((p.y - dest.min.y) / dest.height()).clamp(0.0, 1.0),
+        )
+    };
+    Rect::from_min_max(n(v.min), n(v.max))
+}
+
+/// The pan offset that puts the point at `at` (0..1 of the drawn image) in
+/// the middle of the canvas.
+pub fn offset_to_center(at: Pos2, shown: Vec2) -> Vec2 {
+    Vec2::new((0.5 - at.x) * shown.x, (0.5 - at.y) * shown.y)
+}
+
+/// Minimap size: the image's shape within a `max`×`max` box.
+pub fn minimap_size(shown: Vec2, max: f32) -> Vec2 {
+    let s = max / shown.x.max(shown.y).max(1.0);
+    Vec2::new((shown.x * s).max(8.0), (shown.y * s).max(8.0))
+}
+
 pub fn corners(rect: Rect) -> [Pos2; 4] {
     [
         rect.left_top(),
@@ -346,6 +371,22 @@ mod tests {
             let i = uvs.iter().position(|u| u == uv).unwrap();
             assert_eq!(q[corner], dest[i]);
         }
+    }
+
+    #[test]
+    fn minimap_shows_the_visible_part() {
+        let canvas = Rect::from_min_size(pos2(0.0, 0.0), Vec2::new(100.0, 100.0));
+        // Image drawn 400x200, centred: the middle quarter (x) and half (y).
+        let shown = Vec2::new(400.0, 200.0);
+        let dest = Rect::from_center_size(canvas.center(), shown);
+        let v = visible_part(dest, canvas);
+        assert_eq!(v, Rect::from_min_max(pos2(0.375, 0.25), pos2(0.625, 0.75)));
+        // Clicking the right edge of the minimap pans there.
+        let off = offset_to_center(pos2(0.875, 0.5), shown);
+        let dest = Rect::from_center_size(canvas.center() + off, shown);
+        let v = visible_part(dest, canvas);
+        assert!((v.center().x - 0.875).abs() < 1e-6);
+        assert_eq!(minimap_size(shown, 160.0), Vec2::new(160.0, 80.0));
     }
 
     #[test]

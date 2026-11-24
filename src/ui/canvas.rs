@@ -9,7 +9,10 @@ use crate::app::{MuudApp, VERSION};
 use crate::core::folder;
 use crate::core::keymap::Cmd;
 use crate::core::library::Slot;
-use crate::core::view::{clamp_offset, compose_uvs, corners, place_part, zoom_about, ZoomMode};
+use crate::core::view::{
+    clamp_offset, compose_uvs, corners, minimap_size, offset_to_center, place_part, visible_part,
+    zoom_about, ZoomMode,
+};
 use crate::platform;
 use crate::ui::theme::*;
 
@@ -219,6 +222,31 @@ impl MuudApp {
             self.view.flip_h,
             self.view.flip_v,
         );
+        let minimap = (can_pan && self.settings.minimap).then(|| {
+            let size = minimap_size(shown, 168.0);
+            // Lifted above the floating bottom bar while it shows.
+            let lift = crate::app::BOTTOM_BAR * self.bar_visible_bottom;
+            Rect::from_min_size(rect.right_bottom() - size - vec2(16.0, 16.0 + lift), size)
+        });
+        // Clicking or dragging in the minimap pans there.
+        if let Some(mini) = minimap {
+            let r = ui.interact(mini, ui.scope_id().with("minimap"), Sense::click_and_drag());
+            if let Some(pos) = r
+                .interact_pointer_pos()
+                .filter(|_| r.is_pointer_button_down_on())
+            {
+                let at = pos2(
+                    ((pos.x - mini.min.x) / mini.width()).clamp(0.0, 1.0),
+                    ((pos.y - mini.min.y) / mini.height()).clamp(0.0, 1.0),
+                );
+                self.view.offset = clamp_offset(offset_to_center(at, shown), shown, rect.size());
+                ctx.request_repaint();
+            }
+            if r.hovered() {
+                ctx.set_cursor_icon(CursorIcon::Crosshair);
+            }
+        }
+
         let tex = &self.textures[&draw_path];
         if tex.tiles.is_empty() {
             let frame = &tex.handles[self.frame_index.min(tex.handles.len() - 1)];
@@ -239,6 +267,42 @@ impl MuudApp {
                     p.add(quad(handle.id(), at, unit));
                 }
             }
+        }
+
+        if let Some(mini) = minimap {
+            // Small copy of the image (the screen-size texture or the tiled
+            // image's preview), the visible part outlined, the rest dimmed.
+            let frame = &tex.handles[self.frame_index.min(tex.handles.len() - 1)];
+            p.rect_filled(mini.expand(4.0), CornerRadius::ZERO, paper());
+            p.add(quad(frame.id(), corners(mini), uvs));
+            let v = visible_part(dest, rect);
+            let view = Rect::from_min_max(
+                mini.min + v.min.to_vec2() * mini.size(),
+                mini.min + v.max.to_vec2() * mini.size(),
+            );
+            let dim = Color32::from_black_alpha(110);
+            for r in [
+                Rect::from_min_max(mini.min, pos2(mini.max.x, view.min.y)),
+                Rect::from_min_max(pos2(mini.min.x, view.max.y), mini.max),
+                Rect::from_min_max(pos2(mini.min.x, view.min.y), pos2(view.min.x, view.max.y)),
+                Rect::from_min_max(pos2(view.max.x, view.min.y), pos2(mini.max.x, view.max.y)),
+            ] {
+                if r.is_positive() {
+                    p.rect_filled(r, CornerRadius::ZERO, dim);
+                }
+            }
+            p.rect_stroke(
+                view,
+                CornerRadius::ZERO,
+                egui::Stroke::new(1.5, Color32::WHITE),
+                StrokeKind::Inside,
+            );
+            p.rect_stroke(
+                mini.expand(4.0),
+                CornerRadius::ZERO,
+                hair(),
+                StrokeKind::Inside,
+            );
         }
     }
 

@@ -10,3 +10,4 @@ pub mod log;
 pub mod photo_folders;
 pub mod settings;
 pub mod view;
+pub mod watch;

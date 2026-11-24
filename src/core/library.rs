@@ -28,6 +28,20 @@ impl Slot {
     }
 }
 
+/// What a folder change did to the current image.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Applied {
+    Nothing,
+    /// Still shown (maybe at a new position or under a new name).
+    Kept,
+    /// Rewritten by another program; decoded again.
+    CurrentReloaded,
+    /// Gone; the next image is shown.
+    CurrentRemoved,
+    /// The folder has no images left.
+    Emptied,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Step {
     Moved,
@@ -406,6 +420,97 @@ impl Library {
         }
     }
 
+    /// Applies changes made to the folder by other programs. The current
+    /// image stays current if it still exists (also when renamed); if it was
+    /// removed, the image that took its place is shown. Changes the app made
+    /// itself (already applied) are ignored. Returns what happened to the
+    /// current image.
+    pub fn apply_change(
+        &mut self,
+        change: &super::watch::Change,
+        sort: super::settings::SortBy,
+        desc: bool,
+    ) -> Applied {
+        let before = self.current().cloned();
+        let mut changed = false;
+        for (old, new) in &change.renamed {
+            if self.files.contains(old) {
+                self.replace_path(old, new.clone());
+                changed = true;
+            } else if !self.files.contains(new) {
+                self.files.push(new.clone());
+                changed = true;
+            }
+        }
+        // Where the current image was, counted among files that remain, so
+        // a removed current image is replaced by the next one.
+        let removed: HashSet<&PathBuf> = change.removed.iter().collect();
+        let kept_before = self.files[..self.index.min(self.files.len())]
+            .iter()
+            .filter(|p| !removed.contains(p))
+            .count();
+        let n = self.files.len();
+        self.files.retain(|p| !removed.contains(p));
+        changed |= self.files.len() != n;
+        for p in &change.removed {
+            self.cache.remove(p);
+            self.lru.retain(|q| q != p);
+        }
+        for p in &change.added {
+            if !self.files.contains(p) {
+                self.files.push(p.clone());
+                changed = true;
+            }
+        }
+        let mut reload_current = false;
+        for p in &change.modified {
+            if self.cache.remove(p).is_some() {
+                self.lru.retain(|q| q != p);
+            }
+            if self.full.as_ref().is_some_and(|(f, _)| f == p) {
+                self.full = None;
+                self.want_full = None;
+            }
+            reload_current |= before.as_ref() == Some(p);
+        }
+        if !changed && change.modified.is_empty() {
+            return Applied::Nothing;
+        }
+        // The current path after any rename.
+        let current = before.as_ref().map(|b| {
+            change
+                .renamed
+                .iter()
+                .find(|(o, _)| o == b)
+                .map(|(_, n)| n.clone())
+                .unwrap_or_else(|| b.clone())
+        });
+        if changed {
+            super::folder::sort_files(&mut self.files, sort, desc);
+        }
+        let result = match current.and_then(|c| self.files.iter().position(|p| *p == c)) {
+            Some(i) => {
+                self.index = i;
+                if reload_current {
+                    Applied::CurrentReloaded
+                } else {
+                    Applied::Kept
+                }
+            }
+            None if self.files.is_empty() => {
+                self.index = 0;
+                Applied::Emptied
+            }
+            None => {
+                self.index = kept_before.min(self.files.len() - 1);
+                Applied::CurrentRemoved
+            }
+        };
+        self.drop_full_unless_current();
+        self.request();
+        result
+    }
+
     /// Adds a decoded image that did not come from the loader (e.g. pasted).
     pub fn insert_decoded(&mut self, path: PathBuf, decoded: Arc<Decoded>) {
         self.insert(path, Slot::Ready(decoded));
@@ -609,6 +714,86 @@ mod tests {
         // Moving on frees it.
         lib.go_to(1);
         assert!(!lib.has_full(&first));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn folder_changes_keep_the_current_image() {
+        use crate::core::settings::SortBy;
+        use crate::core::watch::Change;
+        let (mut lib, dir) = lib_with(5);
+        lib.go_to(2);
+        let cur = lib.files[2].clone();
+        // A new file sorts in before the current one: position moves, image stays.
+        let change = Change {
+            added: vec![dir.join("00a.png")],
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.apply_change(&change, SortBy::Name, false),
+            Applied::Kept
+        );
+        assert_eq!(lib.current(), Some(&cur));
+        assert_eq!(lib.index, 3);
+        // Applying the same change again does nothing.
+        assert_eq!(
+            lib.apply_change(&change, SortBy::Name, false),
+            Applied::Nothing
+        );
+        // Renamed elsewhere: follow it.
+        let renamed = dir.join("zz.png");
+        let change = Change {
+            renamed: vec![(cur.clone(), renamed.clone())],
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.apply_change(&change, SortBy::Name, false),
+            Applied::Kept
+        );
+        assert_eq!(lib.current(), Some(&renamed));
+        assert_eq!(lib.index, lib.len() - 1);
+        // Removed: the image that took its place (here the new last one).
+        let change = Change {
+            removed: vec![renamed.clone()],
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.apply_change(&change, SortBy::Name, false),
+            Applied::CurrentRemoved
+        );
+        assert_eq!(lib.index, lib.len() - 1);
+        // Removing one before the current keeps the current.
+        lib.go_to(2);
+        let cur = lib.files[2].clone();
+        let change = Change {
+            removed: vec![lib.files[0].clone()],
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.apply_change(&change, SortBy::Name, false),
+            Applied::Kept
+        );
+        assert_eq!(lib.current(), Some(&cur));
+        assert_eq!(lib.index, 1);
+        // Rewritten: decoded again.
+        let change = Change {
+            modified: vec![cur.clone()],
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.apply_change(&change, SortBy::Name, false),
+            Applied::CurrentReloaded
+        );
+        // Everything gone.
+        let change = Change {
+            removed: lib.files.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.apply_change(&change, SortBy::Name, false),
+            Applied::Emptied
+        );
+        assert!(lib.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

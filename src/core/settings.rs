@@ -78,6 +78,8 @@ pub struct Settings {
     pub dark: bool,
     /// Convert images with an embedded ICC profile to sRGB.
     pub color_manage: bool,
+    /// Show where you are in a zoomed-in image (`/`).
+    pub minimap: bool,
 }
 
 impl Default for Settings {
@@ -107,6 +109,7 @@ impl Default for Settings {
             lang: Lang::Ko,
             dark: false,
             color_manage: true,
+            minimap: true,
         }
     }
 }

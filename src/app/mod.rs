@@ -83,8 +83,13 @@ pub struct MuudApp {
     pub(crate) edge_accum: f32,
     /// A navigation key is held down until this moment.
     pub(crate) rapid_until: Option<Instant>,
+    /// Watches the open folder for changes made by other programs.
+    watcher: Option<crate::core::watch::Watcher>,
+    ctx: egui::Context,
     pointer_moved_at: Instant,
     bar_visible_top: f32,
+    /// How visible the floating bottom bar was last frame (0..1).
+    pub(crate) bar_visible_bottom: f32,
     remembered: Option<PathBuf>,
     rng: u64,
     incoming: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
@@ -178,8 +183,11 @@ impl MuudApp {
             zoom_locked: false,
             edge_accum: 0.0,
             rapid_until: None,
+            watcher: None,
+            ctx: cc.egui_ctx.clone(),
             pointer_moved_at: Instant::now(),
             bar_visible_top: 0.0,
+            bar_visible_bottom: 0.0,
             remembered: None,
             rng: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -215,6 +223,15 @@ impl MuudApp {
                     }
                 }
                 self.settings.add_recent(&folder_key);
+                if let Some(dir) = &folder_path {
+                    if self.watcher.as_ref().map(|w| &w.dir) != Some(dir) {
+                        self.watcher = Some(crate::core::watch::Watcher::start(
+                            dir.clone(),
+                            self.ctx.clone(),
+                            crate::core::watch::INTERVAL,
+                        ));
+                    }
+                }
                 self.last_dir = folder_path;
                 self.open_error = None;
                 self.lib.set_files(l.files, index);
@@ -229,6 +246,7 @@ impl MuudApp {
     }
 
     pub(crate) fn close_file(&mut self) {
+        self.watcher = None;
         self.lib.clear();
         self.shown = None;
         self.textures.clear();
@@ -342,6 +360,7 @@ impl MuudApp {
         self.lib
             .insert_decoded(label.clone(), std::sync::Arc::new(decoded));
         self.lib.set_files(vec![label], 0);
+        self.watcher = None;
         self.open_error = None;
         self.reset_view();
     }
@@ -370,6 +389,37 @@ impl MuudApp {
             crate::core::log::error(&text);
         }
         self.toast = Some((text, Instant::now()));
+    }
+
+    /// Folder changes made by other programs.
+    fn poll_watcher(&mut self) {
+        use crate::core::library::Applied;
+        let Some(w) = &self.watcher else {
+            return;
+        };
+        let changes = w.poll();
+        for change in changes {
+            let added = change.added.len();
+            match self
+                .lib
+                .apply_change(&change, self.settings.sort, self.settings.sort_desc)
+            {
+                Applied::Nothing => {}
+                Applied::Emptied => {
+                    self.close_file();
+                    self.notify("NO IMAGES IN THIS FOLDER");
+                    return;
+                }
+                Applied::CurrentRemoved => {
+                    self.reset_view();
+                    self.notify("FILE REMOVED");
+                }
+                Applied::Kept | Applied::CurrentReloaded if added > 0 => {
+                    self.notify(format!("NEW IMAGES · {added}"));
+                }
+                Applied::Kept | Applied::CurrentReloaded => {}
+            }
+        }
     }
 
     /// Files sent by a second launch ("Open with" while a window is open).
@@ -596,6 +646,7 @@ impl eframe::App for MuudApp {
         self.update_screen_size(&ctx);
         self.lib.poll();
         self.poll_jobs();
+        self.poll_watcher();
         self.poll_incoming(&ctx);
         self.handle_drops(&ctx);
         self.handle_keys(&ctx);
@@ -653,8 +704,10 @@ impl eframe::App for MuudApp {
                 self.floating_bar(&ctx, Edge::Top, a);
             }
         }
+        self.bar_visible_bottom = 0.0;
         if !pin_bottom && !empty {
             let a = self.bar_opacity(&ctx, Edge::Bottom);
+            self.bar_visible_bottom = a;
             if a > 0.01 {
                 self.floating_bar(&ctx, Edge::Bottom, a);
             } else {

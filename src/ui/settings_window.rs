@@ -71,6 +71,7 @@ pub fn cmd_label(cmd: Cmd) -> String {
                 Cmd::CycleBackground => "배경 바꾸기",
                 Cmd::CycleOsd => "화면 표시 바꾸기",
                 Cmd::ToggleInfo => "정보 패널",
+                Cmd::Minimap => "미니맵",
                 Cmd::PinTop => "상단 바 고정",
                 Cmd::PinBottom => "하단 바 고정",
                 Cmd::RotateCw => "시계 방향 회전",
@@ -301,6 +302,14 @@ impl MuudApp {
             (!self.settings.smooth) as usize,
         ) {
             self.settings.smooth = i == 0;
+        }
+        if let Some(i) = choice_row(
+            ui,
+            "MINIMAP",
+            &[tr("ON"), tr("OFF")],
+            (!self.settings.minimap) as usize,
+        ) {
+            self.settings.minimap = i == 0;
         }
         if let Some(i) = choice_row(
             ui,
