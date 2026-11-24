@@ -151,6 +151,41 @@ pub fn corner_uvs(turns: u8, flip_h: bool, flip_v: bool) -> [Pos2; 4] {
     uv
 }
 
+/// Like [`corner_uvs`], but first applies the image's own EXIF orientation.
+pub fn compose_uvs(
+    base: crate::core::decode::Orientation,
+    turns: u8,
+    flip_h: bool,
+    flip_v: bool,
+) -> [Pos2; 4] {
+    let base_uvs = corner_uvs(base.turns, base.flip, false);
+    let user = corner_indices(turns, flip_h, flip_v);
+    [
+        base_uvs[user[0]],
+        base_uvs[user[1]],
+        base_uvs[user[2]],
+        base_uvs[user[3]],
+    ]
+}
+
+/// For each destination corner (TL, TR, BR, BL), which source corner shows there.
+fn corner_indices(turns: u8, flip_h: bool, flip_v: bool) -> [usize; 4] {
+    let k = (turns % 4) as usize;
+    let mut idx = [0usize; 4];
+    for (i, slot) in idx.iter_mut().enumerate() {
+        *slot = (i + 4 - k) % 4;
+    }
+    if flip_h {
+        idx.swap(0, 1);
+        idx.swap(2, 3);
+    }
+    if flip_v {
+        idx.swap(0, 3);
+        idx.swap(1, 2);
+    }
+    idx
+}
+
 pub fn corners(rect: Rect) -> [Pos2; 4] {
     [
         rect.left_top(),
@@ -242,5 +277,24 @@ mod tests {
         assert_eq!(uv[0], pos2(1.0, 0.0));
         let uv = corner_uvs(2, false, false);
         assert_eq!(uv[0], pos2(1.0, 1.0));
+    }
+
+    #[test]
+    fn exif_orientation_composes_with_user_rotation() {
+        use crate::core::decode::Orientation;
+        let base = Orientation {
+            turns: 1,
+            flip: false,
+        };
+        // EXIF says rotate CW; user rotates CCW: back to the stored pixels.
+        assert_eq!(
+            compose_uvs(base, 3, false, false),
+            corner_uvs(0, false, false)
+        );
+        // No user change: same as the EXIF rotation alone.
+        assert_eq!(
+            compose_uvs(base, 0, false, false),
+            corner_uvs(1, false, false)
+        );
     }
 }

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::folder::IMAGE_EXTENSIONS;
+use crate::core::folder::IMAGE_EXTENSIONS;
 
 #[cfg(windows)]
 pub fn pick_file(start: Option<&Path>) -> Option<PathBuf> {

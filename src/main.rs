@@ -2,13 +2,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod exif_info;
-mod folder;
-mod input;
-mod loader;
+mod core;
 mod platform;
-mod theme;
-mod view;
+mod ui;
 
 use std::path::PathBuf;
 

@@ -37,6 +37,10 @@ image = { version = "0.25", default-features = false, features = [
 kamadak-exif = "0.6"
 trash = "5"
 serde = { version = "1", features = ["derive"] }
+zune-jpeg = "0.5"
+zune-core = "0.5"
+bytemuck = "1"
+ecolor = { version = "0.37", features = ["bytemuck"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(windows)'.dependencies]

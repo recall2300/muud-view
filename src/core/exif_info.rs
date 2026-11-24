@@ -17,6 +17,8 @@ pub struct ExifInfo {
     pub flash: Option<String>,
     pub gps: Option<(f64, f64)>,
     pub altitude: Option<String>,
+    /// EXIF Orientation tag (1 = upright).
+    pub orientation: u32,
 }
 
 impl ExifInfo {
@@ -158,6 +160,7 @@ pub fn read(bytes: &[u8]) -> Option<ExifInfo> {
         flash,
         gps,
         altitude,
+        orientation: uint(Tag::Orientation).unwrap_or(1),
     })
 }
 

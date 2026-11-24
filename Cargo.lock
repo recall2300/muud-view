@@ -1600,7 +1600,9 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 name = "muud-view"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "chrono",
+ "ecolor",
  "eframe",
  "image",
  "kamadak-exif",
@@ -1608,6 +1610,8 @@ dependencies = [
  "serde",
  "trash",
  "winresource",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

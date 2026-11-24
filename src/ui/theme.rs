@@ -47,22 +47,24 @@ pub fn install_fonts(ctx: &egui::Context) {
     add(
         &mut fonts,
         "inter-tight-800",
-        FontData::from_static(include_bytes!("../assets/fonts/InterTight-ExtraBold.ttf")),
+        FontData::from_static(include_bytes!(
+            "../../assets/fonts/InterTight-ExtraBold.ttf"
+        )),
     );
     add(
         &mut fonts,
         "inter-tight-600",
-        FontData::from_static(include_bytes!("../assets/fonts/InterTight-SemiBold.ttf")),
+        FontData::from_static(include_bytes!("../../assets/fonts/InterTight-SemiBold.ttf")),
     );
     add(
         &mut fonts,
         "plex-mono-400",
-        FontData::from_static(include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf")),
+        FontData::from_static(include_bytes!("../../assets/fonts/IBMPlexMono-Regular.ttf")),
     );
     add(
         &mut fonts,
         "plex-mono-500",
-        FontData::from_static(include_bytes!("../assets/fonts/IBMPlexMono-Medium.ttf")),
+        FontData::from_static(include_bytes!("../../assets/fonts/IBMPlexMono-Medium.ttf")),
     );
 
     let (hangul, hangul_bold) = load_hangul_fonts();
