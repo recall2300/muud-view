@@ -14,6 +14,7 @@ pub fn pick_file(start: Option<&Path>) -> Option<PathBuf> {
     let mut d = rfd::FileDialog::new()
         .set_title("Open image")
         .add_filter("Images", IMAGE_EXTENSIONS)
+        .add_filter("Archives (zip, cbz)", crate::core::archive::ARCHIVE_EXTENSIONS)
         .add_filter("All files", &["*"]);
     if let Some(dir) = start {
         d = d.set_directory(dir);

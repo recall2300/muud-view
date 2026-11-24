@@ -274,6 +274,10 @@ impl MuudApp {
     // Files
 
     pub(crate) fn open(&mut self, path: &Path) {
+        if crate::core::archive::is_archive(path) && path.is_file() {
+            self.open_archive(path);
+            return;
+        }
         match folder::list_sorted(path, self.settings.sort, self.settings.sort_desc) {
             Ok(l) if !l.files.is_empty() => {
                 let folder_path = l.files[l.index].parent().map(Path::to_path_buf);
@@ -310,6 +314,46 @@ impl MuudApp {
                 self.open_error = Some(e.to_string());
                 self.notify("CANNOT OPEN");
             }
+        }
+    }
+
+    /// Opens a zip/cbz like a folder: its images, by name.
+    fn open_archive(&mut self, archive: &Path) {
+        match crate::core::archive::list(archive) {
+            Ok(files) if !files.is_empty() => {
+                let key = archive.display().to_string();
+                let mut index = 0;
+                if self.settings.resume {
+                    if let Some(name) = self.settings.position_in(&key) {
+                        if let Some(i) = files.iter().position(|f| folder::file_name(f) == name) {
+                            index = i;
+                        }
+                    }
+                }
+                self.settings.add_recent(&key);
+                self.watcher = None;
+                self.all_files = None;
+                self.end_compare();
+                self.last_dir = archive.parent().map(Path::to_path_buf);
+                self.open_error = None;
+                self.lib.set_files(files, index);
+                self.reset_view();
+                self.grid_wanted = (0, 0);
+            }
+            Ok(_) => self.notify("NO IMAGES IN THIS FOLDER"),
+            Err(e) => {
+                self.open_error = Some(e.to_string());
+                self.notify("CANNOT OPEN");
+            }
+        }
+    }
+
+    /// The folder or archive the current image lives in.
+    pub(crate) fn container(&self) -> Option<PathBuf> {
+        let cur = self.lib.current()?;
+        match crate::core::archive::split(cur) {
+            Some((archive, _)) if !cur.exists() => Some(archive),
+            _ => cur.parent().map(Path::to_path_buf),
         }
     }
 
@@ -717,13 +761,15 @@ impl MuudApp {
         let Some(cur) = self.lib.current() else {
             return;
         };
-        if self.remembered.as_ref() == Some(cur) || !cur.exists() {
+        let real = cur.exists() || crate::core::archive::is_virtual(cur);
+        if self.remembered.as_ref() == Some(cur) || !real {
             return;
         }
         let cur = cur.clone();
-        if let Some(folder) = cur.parent() {
+        // Keyed by the folder or archive, so reopening either resumes.
+        if let Some(container) = self.container() {
             self.settings
-                .remember_position(&folder.display().to_string(), &folder::file_name(&cur));
+                .remember_position(&container.display().to_string(), &folder::file_name(&cur));
         }
         self.remembered = Some(cur);
     }

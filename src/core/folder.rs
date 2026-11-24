@@ -70,6 +70,39 @@ pub fn list_sorted(
     Ok(Listing { files, index })
 }
 
+/// True if `dir` (a folder or an archive) holds at least one image.
+fn has_images(dir: &Path) -> bool {
+    if super::archive::is_archive(dir) {
+        return super::archive::list(dir).is_ok_and(|l| !l.is_empty());
+    }
+    std::fs::read_dir(dir).is_ok_and(|rd| {
+        rd.filter_map(Result::ok)
+            .any(|e| e.file_type().is_ok_and(|t| t.is_file()) && is_image(&e.path()))
+    })
+}
+
+/// The next (`delta` = 1) or previous (-1) folder or archive next to
+/// `container` that has images, in natural name order (`]` / `[`).
+pub fn sibling(container: &Path, delta: i32) -> Option<PathBuf> {
+    let parent = container.parent()?;
+    let mut items: Vec<PathBuf> = std::fs::read_dir(parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() || (p.is_file() && super::archive::is_archive(p)))
+        .collect();
+    items.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b)));
+    let at = items.iter().position(|p| p == container)?;
+    let mut i = at as i64;
+    loop {
+        i += delta.signum() as i64;
+        let candidate = items.get(usize::try_from(i).ok()?)?;
+        if has_images(candidate) {
+            return Some(candidate.clone());
+        }
+    }
+}
+
 pub fn sort_files(files: &mut [PathBuf], sort: crate::core::settings::SortBy, desc: bool) {
     use crate::core::settings::SortBy;
     let meta = |p: &Path| std::fs::metadata(p).ok();
@@ -155,6 +188,25 @@ mod tests {
     fn sorted(mut v: Vec<&str>) -> Vec<&str> {
         v.sort_by(|a, b| natural_cmp(a, b));
         v
+    }
+
+    #[test]
+    fn next_and_previous_folder_skip_ones_without_images() {
+        let dir = crate::core::archive::tests::temp_dir("sibling");
+        for (name, img) in [("a", true), ("b", false), ("c", true)] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+            if img {
+                std::fs::write(dir.join(name).join("1.png"), b"x").unwrap();
+            }
+        }
+        let zip = crate::core::archive::tests::raw_zip(&[(b"1.png", b"x")]);
+        std::fs::write(dir.join("d.cbz"), zip).unwrap();
+        assert_eq!(sibling(&dir.join("a"), 1), Some(dir.join("c")));
+        assert_eq!(sibling(&dir.join("c"), 1), Some(dir.join("d.cbz")));
+        assert_eq!(sibling(&dir.join("d.cbz"), -1), Some(dir.join("c")));
+        assert_eq!(sibling(&dir.join("a"), -1), None);
+        assert_eq!(sibling(&dir.join("d.cbz"), 1), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

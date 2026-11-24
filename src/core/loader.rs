@@ -293,7 +293,7 @@ fn reader(shared: Arc<Shared>) {
                 st = shared.wake_reader.wait(st).unwrap();
             }
         };
-        let bytes = std::fs::read(&path).ok().map(Arc::new);
+        let bytes = super::archive::read(&path).ok().map(Arc::new);
         let mut st = shared.state.lock().unwrap();
         st.reading = None;
         match bytes {
@@ -332,7 +332,7 @@ fn worker(shared: Arc<Shared>, tx: Sender<Done>, ctx: egui::Context) {
         let started = Instant::now();
         let bytes = match cached {
             Some(b) => Ok(b),
-            None => std::fs::read(&job.path)
+            None => super::archive::read(&job.path)
                 .map(Arc::new)
                 .map_err(|e| e.to_string()),
         };
@@ -391,7 +391,7 @@ fn decode_with_meta(
 /// Reads and decodes a file on the calling thread.
 pub fn decode_file(path: &Path, opts: DecodeOpts) -> Result<Decoded, String> {
     let started = Instant::now();
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = super::archive::read(path).map_err(|e| e.to_string())?;
     decode_with_meta(&bytes, path, opts, started, &mut |_| {})
 }
 

@@ -59,7 +59,7 @@ pub fn trim_black_bars(img: ColorImage) -> ColorImage {
 
 /// An upright thumbnail of the file, at most [`THUMB`] pixels on its long side.
 pub fn make(path: &Path) -> Result<ColorImage, String> {
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = super::archive::read(path).map_err(|e| e.to_string())?;
     let fit = |img: ColorImage| {
         let [w, h] = img.size;
         let long = w.max(h);

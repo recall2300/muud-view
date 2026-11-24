@@ -80,6 +80,8 @@ pub fn cmd_label(cmd: Cmd) -> String {
                 Cmd::Star => "별표",
                 Cmd::StarredOnly => "별표만 보기",
                 Cmd::Grid => "썸네일 보기",
+                Cmd::NextFolder => "다음 폴더·압축파일",
+                Cmd::PrevFolder => "이전 폴더·압축파일",
                 Cmd::PinTop => "상단 바 고정",
                 Cmd::PinBottom => "하단 바 고정",
                 Cmd::RotateCw => "시계 방향 회전",

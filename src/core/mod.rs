@@ -1,3 +1,4 @@
+pub mod archive;
 #[cfg(test)]
 mod bench;
 pub mod color;

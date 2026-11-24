@@ -43,6 +43,9 @@ bytemuck = "1"
 ecolor = { version = "0.37", features = ["bytemuck"] }
 arboard = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# zip/cbz archives (MIT), deflate only; CP949 (Korean) file names in them.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+encoding_rs = "0.8"
 # ICC colour management (BSD-3-Clause OR Apache-2.0); already used by `image`.
 moxcms = "0.8"
 

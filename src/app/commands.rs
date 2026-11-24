@@ -18,7 +18,41 @@ use crate::platform;
 impl MuudApp {
     pub(crate) fn run(&mut self, ctx: &egui::Context, cmd: Cmd) {
         let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        // Files inside an archive cannot be moved, deleted or renamed.
+        let changes_file = matches!(
+            cmd,
+            Cmd::Trash
+                | Cmd::DeletePermanently
+                | Cmd::CopyToFolder(_)
+                | Cmd::MoveToFolder(_)
+                | Cmd::Rename
+                | Cmd::ShareCopy
+        );
+        if changes_file
+            && self
+                .lib
+                .current()
+                .is_some_and(|p| crate::core::archive::is_virtual(p))
+        {
+            self.notify("NOT POSSIBLE INSIDE AN ARCHIVE");
+            return;
+        }
         match cmd {
+            Cmd::NextFolder | Cmd::PrevFolder => {
+                let delta = if cmd == Cmd::NextFolder { 1 } else { -1 };
+                match self.container().and_then(|c| folder::sibling(&c, delta)) {
+                    Some(next) => {
+                        let name = folder::file_name(&next);
+                        self.open(&next);
+                        self.notify(format!("FOLDER · {name}"));
+                    }
+                    None => self.notify(if delta > 0 {
+                        "LAST FOLDER"
+                    } else {
+                        "FIRST FOLDER"
+                    }),
+                }
+            }
             Cmd::OpenFile => {
                 if platform::dialogs_available() {
                     if let Some(p) = platform::pick_file(self.last_dir.as_deref()) {
