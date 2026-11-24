@@ -495,7 +495,11 @@ impl MuudApp {
                 let next = *self
                     .next_frame_at
                     .get_or_insert(now + d.frames[self.frame_index % n].delay);
-                if now >= next {
+                let waiting = !d.complete && self.frame_index + 1 >= n;
+                if waiting {
+                    // Still decoding: hold the last frame until more arrive.
+                    self.next_frame_at = Some(now + Duration::from_millis(30));
+                } else if now >= next {
                     self.frame_index = (self.frame_index + 1) % n;
                     let delay = d.frames[self.frame_index].delay;
                     let mut at = next + delay;

@@ -459,13 +459,23 @@ impl MuudApp {
         let Some(d) = self.lib.best(path).cloned() else {
             return false;
         };
-        if let Some(t) = self.textures.get(path) {
+        let opts = self.texture_options();
+        let name = path.display().to_string();
+        if let Some(t) = self.textures.get_mut(path) {
             if std::sync::Arc::ptr_eq(&t.src, &d) {
                 return false;
             }
+            // More frames of an animation that is still decoding: upload
+            // only the new ones.
+            if continues(&t.src, &d) {
+                for f in &d.frames[t.handles.len()..] {
+                    t.handles
+                        .push(ctx.load_texture(name.clone(), f.image.clone(), opts));
+                }
+                t.src = d;
+                return true;
+            }
         }
-        let opts = self.texture_options();
-        let name = path.display().to_string();
         let handles = d
             .frames
             .iter()
@@ -624,6 +634,20 @@ impl MuudApp {
         }
         ctx.request_repaint();
     }
+}
+
+/// True if `new` is `old` with more frames added (a streaming animation).
+fn continues(old: &crate::core::decode::Decoded, new: &crate::core::decode::Decoded) -> bool {
+    !old.complete
+        && old.tiles.is_empty()
+        && new.tiles.is_empty()
+        && !old.frames.is_empty()
+        && old.frames.len() <= new.frames.len()
+        && old
+            .frames
+            .iter()
+            .zip(&new.frames)
+            .all(|(a, b)| std::sync::Arc::ptr_eq(&a.image, &b.image))
 }
 
 impl eframe::App for MuudApp {

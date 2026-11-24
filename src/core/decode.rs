@@ -67,6 +67,7 @@ pub struct Tile {
     pub image: Arc<ColorImage>,
 }
 
+#[derive(Clone)]
 pub struct Frame {
     pub image: Arc<ColorImage>,
     pub delay: Duration,
@@ -129,6 +130,8 @@ pub struct Decoded {
     pub profile: Option<String>,
     /// Colours were converted from that profile to sRGB.
     pub color_converted: bool,
+    /// False for an animation still being decoded (more frames follow).
+    pub complete: bool,
 }
 
 impl Decoded {
@@ -190,11 +193,25 @@ impl Decoded {
             tiled_size: [0, 0],
             profile: None,
             color_converted: false,
+            complete: true,
         }
     }
 }
 
+#[cfg(test)]
 pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decoded, String> {
+    decode_streaming(bytes, path, opts, &mut |_| {})
+}
+
+/// Like [`decode_bytes`], but an animation is also handed to `partial` while
+/// it decodes (after the first frame, then every [`STREAM_EVERY`]), so a
+/// big GIF starts playing right away.
+pub fn decode_streaming(
+    bytes: &[u8],
+    path: &Path,
+    opts: DecodeOpts,
+    partial: &mut dyn FnMut(Decoded),
+) -> Result<Decoded, String> {
     let format = image::guess_format(bytes)
         .ok()
         .or_else(|| ImageFormat::from_path(path).ok())
@@ -217,26 +234,9 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
         }
     }
 
-    let animated = match format {
-        ImageFormat::Gif => decode_animation(
-            image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?,
-            opts,
-        )?,
-        ImageFormat::WebP => {
-            let dec = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))
-                .map_err(|e| e.to_string())?;
-            if dec.has_animation() {
-                decode_animation(dec, opts)?
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-
-    if let Some((frames, w, h, reduced)) = animated {
+    let animation = |frames: Vec<Frame>, w: u32, h: u32, reduced: bool, complete: bool| {
         let histogram = histogram_of(&frames[0].image);
-        return Ok(Decoded {
+        Decoded {
             width: w,
             height: h,
             orientation: Orientation::default(),
@@ -247,14 +247,39 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
             frames,
             file_size: 0,
             modified: None,
-            exif,
+            exif: exif.clone(),
             decode_time: Duration::ZERO,
             reduced,
             tiles: Vec::new(),
             tiled_size: [0, 0],
             profile: None,
             color_converted: false,
-        });
+            complete,
+        }
+    };
+    let mut stream = |frames: &[Frame], w: u32, h: u32, reduced: bool| {
+        partial(animation(frames.to_vec(), w, h, reduced, false));
+    };
+    let animated = match format {
+        ImageFormat::Gif => decode_animation(
+            image::codecs::gif::GifDecoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?,
+            opts,
+            &mut stream,
+        )?,
+        ImageFormat::WebP => {
+            let dec = image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))
+                .map_err(|e| e.to_string())?;
+            if dec.has_animation() {
+                decode_animation(dec, opts, &mut stream)?
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    if let Some((frames, w, h, reduced)) = animated {
+        return Ok(animation(frames, w, h, reduced, true));
     }
 
     let mut reader = image::ImageReader::with_format(Cursor::new(bytes), format);
@@ -310,6 +335,7 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
         tiled_size,
         profile,
         color_converted,
+        complete: true,
     })
 }
 
@@ -368,6 +394,7 @@ fn decode_jpeg(
         tiled_size,
         profile,
         color_converted,
+        complete: true,
     })
 }
 
@@ -406,16 +433,29 @@ fn opaque_color_image(img: DynamicImage) -> ColorImage {
 
 type Animation = Option<(Vec<Frame>, u32, u32, bool)>;
 
+/// Receives an animation's frames so far: (frames, width, height, reduced).
+type StreamFn<'s> = dyn FnMut(&[Frame], u32, u32, bool) + 's;
+
+/// How often a decoding animation is handed over with its new frames.
+pub const STREAM_EVERY: Duration = Duration::from_millis(250);
+
 fn decode_animation<'a>(
     dec: impl AnimationDecoder<'a>,
     opts: DecodeOpts,
+    stream: &mut StreamFn<'_>,
 ) -> Result<Animation, String> {
     let mut frames = Vec::new();
     let mut total = 0usize;
     let mut reduced = false;
     let (mut w, mut h) = (0, 0);
+    let mut sent: Option<std::time::Instant> = None;
     for frame in dec.into_frames() {
-        let frame = frame.map_err(|e| e.to_string())?;
+        let frame = match frame {
+            Ok(f) => f,
+            // A truncated file: play the frames we got.
+            Err(_) if frames.len() > 1 => break,
+            Err(e) => return Err(e.to_string()),
+        };
         let (num, den) = frame.delay().numer_denom_ms();
         let ms = num.checked_div(den).unwrap_or(100);
         // Browsers treat very short delays as 100 ms; do the same.
@@ -437,6 +477,10 @@ fn decode_animation<'a>(
         });
         if total > MAX_ANIMATION_BYTES {
             break;
+        }
+        if sent.is_none_or(|t| t.elapsed() >= STREAM_EVERY) {
+            stream(&frames, w, h, reduced);
+            sent = Some(std::time::Instant::now());
         }
     }
     Ok(match frames.len() {
@@ -972,6 +1016,52 @@ mod tests {
         assert_eq!(d.frames[0].image.pixels[0], Color32::from_rgb(200, 60, 60));
     }
 
+    fn gif_bytes(frames: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = image::codecs::gif::GifEncoder::new(&mut out);
+            for i in 0..frames {
+                let img =
+                    image::RgbaImage::from_pixel(16, 16, image::Rgba([i as u8 * 40, 0, 0, 255]));
+                enc.encode_frame(image::Frame::from_parts(
+                    img,
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(50, 1),
+                ))
+                .unwrap();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn animations_stream_from_the_first_frame() {
+        let bytes = gif_bytes(5);
+        let mut partials = Vec::new();
+        let d = decode_streaming(
+            &bytes,
+            Path::new("a.gif"),
+            DecodeOpts::full(8192),
+            &mut |p| partials.push((p.frames.len(), p.complete)),
+        )
+        .unwrap();
+        // Handed over after the first frame, before the rest were decoded.
+        assert_eq!(partials.first(), Some(&(1, false)));
+        assert!(partials.iter().all(|(n, c)| *n < 5 && !c));
+        assert!(d.complete);
+        assert_eq!(d.frames.len(), 5);
+        assert!(d.is_animated());
+    }
+
+    #[test]
+    fn truncated_animation_plays_what_it_has() {
+        let bytes = gif_bytes(4);
+        let cut = &bytes[..bytes.len() * 3 / 4];
+        let d = decode_bytes(cut, Path::new("a.gif"), DecodeOpts::full(8192)).unwrap();
+        assert!(d.frames.len() >= 2, "{} frames", d.frames.len());
+    }
+
     #[test]
     fn rejects_garbage() {
         assert!(decode_bytes(b"hello", Path::new("x.txt"), DecodeOpts::full(8192)).is_err());
@@ -1094,5 +1184,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `cargo test --release -- --ignored --nocapture bench_gif`: time to
+    /// the first playable frame vs. the whole animation.
+    #[test]
+    #[ignore]
+    fn bench_gif() {
+        let mut out = Vec::new();
+        {
+            let mut enc = image::codecs::gif::GifEncoder::new_with_speed(&mut out, 30);
+            let mut seed = 1u32;
+            for i in 0..120u32 {
+                let img = image::RgbaImage::from_fn(1200, 900, |x, y| {
+                    seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                    let v = ((x + y + i * 7) % 255) as u8;
+                    image::Rgba([v, (seed >> 24) as u8 & 0x3f, 255 - v, 255])
+                });
+                enc.encode_frame(image::Frame::new(img)).unwrap();
+            }
+        }
+        println!("gif: {:.1} MB, 120 frames 1200x900", out.len() as f64 / 1e6);
+        let t = std::time::Instant::now();
+        let mut first = None;
+        let d = decode_streaming(
+            &out,
+            Path::new("a.gif"),
+            DecodeOpts::full(8192),
+            &mut |_| {
+                first.get_or_insert(t.elapsed());
+            },
+        )
+        .unwrap();
+        println!(
+            "first frame after {:.0} ms, all {} frames after {:.0} ms",
+            first.unwrap().as_secs_f64() * 1000.0,
+            d.frames.len(),
+            t.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }

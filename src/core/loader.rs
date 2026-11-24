@@ -336,9 +336,19 @@ fn worker(shared: Arc<Shared>, tx: Sender<Done>, ctx: egui::Context) {
                 .map(Arc::new)
                 .map_err(|e| e.to_string()),
         };
+        // Animations arrive in parts so they start playing at once.
+        let mut partial = |mut d: Decoded| {
+            d.file_size = bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
+            let _ = tx.send(Done {
+                path: job.path.clone(),
+                quality: job.quality,
+                result: Ok(Arc::new(d)),
+            });
+            ctx.request_repaint();
+        };
         let result = bytes
             .clone()
-            .and_then(|b| decode_with_meta(&b, &job.path, opts, started))
+            .and_then(|b| decode_with_meta(&b, &job.path, opts, started, &mut partial))
             .map(Arc::new);
         {
             let mut st = shared.state.lock().unwrap();
@@ -368,9 +378,10 @@ fn decode_with_meta(
     path: &Path,
     opts: DecodeOpts,
     started: Instant,
+    partial: &mut dyn FnMut(Decoded),
 ) -> Result<Decoded, String> {
     let meta = std::fs::metadata(path).ok();
-    let mut decoded = super::decode::decode_bytes(bytes, path, opts)?;
+    let mut decoded = super::decode::decode_streaming(bytes, path, opts, partial)?;
     decoded.file_size = meta.as_ref().map(|m| m.len()).unwrap_or(bytes.len() as u64);
     decoded.modified = meta.and_then(|m| m.modified().ok());
     decoded.decode_time = started.elapsed();
@@ -381,7 +392,7 @@ fn decode_with_meta(
 pub fn decode_file(path: &Path, opts: DecodeOpts) -> Result<Decoded, String> {
     let started = Instant::now();
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-    decode_with_meta(&bytes, path, opts, started)
+    decode_with_meta(&bytes, path, opts, started, &mut |_| {})
 }
 
 #[cfg(test)]
@@ -481,6 +492,33 @@ mod tests {
         loader.want([Job::screen(files[3].clone())]);
         let done = wait_done(&loader);
         assert!(done.result.is_ok(), "{:?}", done.result.err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn animations_arrive_in_parts() {
+        let dir = temp_dir("anim");
+        let p = dir.join("a.gif");
+        let mut gif = Vec::new();
+        {
+            let mut enc = image::codecs::gif::GifEncoder::new(&mut gif);
+            for i in 0..3u8 {
+                let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([i * 80, 0, 0, 255]));
+                enc.encode_frame(image::Frame::new(img)).unwrap();
+            }
+        }
+        std::fs::write(&p, gif).unwrap();
+        let loader = Loader::new(egui::Context::default(), 1);
+        loader.want([Job::screen(p.clone())]);
+        let mut got: Vec<Arc<Decoded>> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !got.last().is_some_and(|d| d.complete) {
+            assert!(Instant::now() < deadline, "decoded in time");
+            got.extend(loader.poll().into_iter().map(|d| d.result.unwrap()));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!got[0].complete, "first part before the rest");
+        assert_eq!(got.last().unwrap().frames.len(), 3);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

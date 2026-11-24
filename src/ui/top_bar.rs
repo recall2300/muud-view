@@ -14,8 +14,9 @@ impl MuudApp {
             v.push(format!("{} × {}", d.width, d.height));
             v.push(human_size(d.file_size));
             v.push(d.format.to_string());
-            if d.is_animated() {
-                v.push(format!("{} FRAMES", d.frames.len()));
+            if d.is_animated() || !d.complete {
+                let more = if d.complete { "" } else { "+" };
+                v.push(format!("{}{more} FRAMES", d.frames.len()));
             }
             v.push(format!("{:.0}%", self.last_scale * 100.0));
             v.push(
