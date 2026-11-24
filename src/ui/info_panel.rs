@@ -105,7 +105,9 @@ impl MuudApp {
             format!("ASPECT {}", aspect(d.width, d.height)),
         ];
         let tex = d.texture_size();
-        if tex[0] < d.width as usize {
+        if d.is_tiled() {
+            lines.push(format!("{} TILES", d.tiles.len()));
+        } else if tex[0].max(tex[1]) < d.width.max(d.height) as usize {
             lines.push(format!("TEXTURE {} × {}", tex[0], tex[1]));
         }
         lines.push("↓".into());

@@ -135,9 +135,18 @@ impl MuudApp {
                 } else {
                     "COPYING …"
                 });
+                // Copy the original pixels, not the screen-size texture (or a
+                // tiled image's preview), unless the texture already has
+                // every pixel the copy needs.
+                let image_long = d.width.max(d.height) as usize;
+                let want_long = if small {
+                    image_long.min(1600)
+                } else {
+                    image_long
+                };
+                let redecode = frame.size[0].max(frame.size[1]) < want_long && !d.is_animated();
                 self.spawn_job(ctx, move || {
-                    // Copy the original pixels, not the screen-sized texture.
-                    let full = if !small && d.is_downscaled() && path.exists() {
+                    let full = if redecode && path.exists() {
                         crate::core::loader::decode_file(
                             &path,
                             crate::core::decode::DecodeOpts::full(1 << 15),

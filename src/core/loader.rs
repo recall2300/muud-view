@@ -139,15 +139,18 @@ struct Shared {
 impl Shared {
     fn opts(&self, quality: Quality) -> DecodeOpts {
         let max_side = self.max_side.load(Ordering::Relaxed);
-        let fit = match quality {
-            Quality::Full => None,
+        match quality {
+            // Full quality draws huge images in tiles instead of shrinking.
+            Quality::Full => DecodeOpts::tiled(max_side),
             Quality::Screen => {
                 let w = self.screen_w.load(Ordering::Relaxed);
                 let h = self.screen_h.load(Ordering::Relaxed);
-                (w > 0 && h > 0).then_some([w, h])
+                DecodeOpts {
+                    fit: (w > 0 && h > 0).then_some([w, h]),
+                    ..DecodeOpts::full(max_side)
+                }
             }
-        };
-        DecodeOpts { max_side, fit }
+        }
     }
 }
 

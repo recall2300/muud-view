@@ -33,6 +33,8 @@ pub const RAPID_GRACE: Duration = Duration::from_millis(200);
 pub(crate) struct Tex {
     pub src: std::sync::Arc<crate::core::decode::Decoded>,
     pub handles: Vec<TextureHandle>,
+    /// For a huge image: each piece and where it sits (texture coordinates).
+    pub tiles: Vec<(Rect, TextureHandle)>,
 }
 
 /// Debug/README helper: `MUUD_SCREENSHOT=out.png` saves the window and exits.
@@ -40,6 +42,7 @@ struct ScreenshotJob {
     path: PathBuf,
     frames: u32,
     requested: bool,
+    started: Instant,
 }
 
 pub struct MuudApp {
@@ -141,6 +144,7 @@ impl MuudApp {
             path: PathBuf::from(p),
             frames: 0,
             requested: false,
+            started: Instant::now(),
         });
         Self {
             settings,
@@ -417,8 +421,27 @@ impl MuudApp {
             .iter()
             .map(|f| ctx.load_texture(name.clone(), f.image.clone(), opts))
             .collect();
-        self.textures
-            .insert(path.to_path_buf(), Tex { src: d, handles });
+        let [fw, fh] = d.texture_size();
+        let tiles = d
+            .tiles
+            .iter()
+            .map(|t| {
+                let [tw, th] = t.image.size;
+                let part = Rect::from_min_size(
+                    Pos2::new(t.x as f32 / fw as f32, t.y as f32 / fh as f32),
+                    vec2(tw as f32 / fw as f32, th as f32 / fh as f32),
+                );
+                (part, ctx.load_texture(name.clone(), t.image.clone(), opts))
+            })
+            .collect();
+        self.textures.insert(
+            path.to_path_buf(),
+            Tex {
+                src: d,
+                handles,
+                tiles,
+            },
+        );
         true
     }
 
@@ -531,7 +554,8 @@ impl MuudApp {
         job.frames += 1;
         // Wait until the first image is on screen (or a few seconds pass).
         let ready = self.lib.is_empty() || (self.shown.is_some() && !self.lib.full_pending());
-        if !job.requested && ((ready && job.frames > 20) || job.frames > 600) {
+        let timed_out = job.started.elapsed() > Duration::from_secs(60);
+        if !job.requested && ((ready && job.frames > 20) || timed_out) {
             job.requested = true;
             let path = job.path.clone();
             let c = ctx.clone();

@@ -27,16 +27,41 @@ pub struct DecodeOpts {
     /// Screen quality: shrink to fit this box (upright width, height in
     /// physical pixels). `None` keeps every pixel the GPU can hold.
     pub fit: Option<[usize; 2]>,
+    /// Images larger than `max_side` are split into tiles instead of being
+    /// shrunk (full quality only).
+    pub tile: bool,
 }
 
 impl DecodeOpts {
-    /// Every pixel up to `max_side`.
+    /// Every pixel up to `max_side`, in one image.
     pub fn full(max_side: usize) -> Self {
         Self {
             max_side,
             fit: None,
+            tile: false,
         }
     }
+
+    /// Every pixel, split into tiles if the GPU cannot hold it in one.
+    pub fn tiled(max_side: usize) -> Self {
+        Self {
+            tile: true,
+            ..Self::full(max_side)
+        }
+    }
+}
+
+/// Side of one tile of a huge image (and never more than the GPU limit).
+pub const TILE_SIDE: usize = 4096;
+/// Most memory a tiled image may take; larger ones are shrunk to fit.
+pub const MAX_TILED_BYTES: usize = 2 * 1024 * 1024 * 1024;
+
+/// One piece of an image too large for a single GPU texture.
+pub struct Tile {
+    /// Position and size in stored (not rotated) pixels.
+    pub x: usize,
+    pub y: usize,
+    pub image: Arc<ColorImage>,
 }
 
 pub struct Frame {
@@ -92,6 +117,11 @@ pub struct Decoded {
     pub decode_time: Duration,
     /// Shrunk to screen size; a full decode would have more pixels.
     pub reduced: bool,
+    /// Every pixel of a huge image, in pieces. `frames` then holds a
+    /// screen-size preview of it.
+    pub tiles: Vec<Tile>,
+    /// Stored size covered by `tiles`.
+    pub tiled_size: [usize; 2],
 }
 
 impl Decoded {
@@ -99,13 +129,25 @@ impl Decoded {
         self.frames.len() > 1
     }
 
-    /// Approximate memory held by the decoded frames.
+    /// Approximate memory held by the decoded frames and tiles.
     pub fn bytes(&self) -> usize {
-        self.frames.iter().map(|f| f.image.pixels.len() * 4).sum()
+        self.frames
+            .iter()
+            .map(|f| f.image.pixels.len() * 4)
+            .chain(self.tiles.iter().map(|t| t.image.pixels.len() * 4))
+            .sum()
     }
 
-    /// Stored texture size (not rotated).
+    pub fn is_tiled(&self) -> bool {
+        !self.tiles.is_empty()
+    }
+
+    /// Stored size of the drawable pixels (not rotated): the tiles if any,
+    /// otherwise the single texture.
     pub fn texture_size(&self) -> [usize; 2] {
+        if self.is_tiled() {
+            return self.tiled_size;
+        }
         self.frames.first().map(|f| f.image.size).unwrap_or([1, 1])
     }
 
@@ -137,6 +179,8 @@ impl Decoded {
             histogram,
             decode_time: Duration::ZERO,
             reduced: false,
+            tiles: Vec::new(),
+            tiled_size: [0, 0],
         }
     }
 }
@@ -197,6 +241,8 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
             exif,
             decode_time: Duration::ZERO,
             reduced,
+            tiles: Vec::new(),
+            tiled_size: [0, 0],
         });
     }
 
@@ -221,7 +267,8 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
         // Opaque: premultiplied and unmultiplied are identical, skip the maths.
         opaque_color_image(img)
     };
-    let (image, reduced) = fit_for_display(image, opts, Orientation::default());
+    let (image, tiles, reduced) = finish(image, opts, Orientation::default());
+    let tiled_size = tiled_size(&tiles);
 
     let histogram = histogram_of(&image);
     let alpha = color.has_alpha() && has_alpha(&image);
@@ -242,6 +289,8 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
         histogram,
         decode_time: Duration::ZERO,
         reduced,
+        tiles,
+        tiled_size,
     })
 }
 
@@ -268,7 +317,8 @@ fn decode_jpeg(
     dec.decode_into(bytemuck::cast_slice_mut(&mut pixels))
         .map_err(|e| format!("{e:?}"))?;
     let image = ColorImage::new([w, h], pixels);
-    let (image, reduced) = fit_for_display(image, opts, orientation);
+    let (image, tiles, reduced) = finish(image, opts, orientation);
+    let tiled_size = tiled_size(&tiles);
 
     let (uw, uh) = if orientation.swaps_axes() {
         (h, w)
@@ -293,6 +343,8 @@ fn decode_jpeg(
         histogram,
         decode_time: Duration::ZERO,
         reduced,
+        tiles,
+        tiled_size,
     })
 }
 
@@ -376,6 +428,69 @@ fn gpu_target(size: [usize; 2], max_side: usize) -> Option<[usize; 2]> {
         ((w as f64 * s).round() as usize).clamp(1, max_side),
         ((h as f64 * s).round() as usize).clamp(1, max_side),
     ])
+}
+
+/// The last step for a still image: tiles for a huge image at full quality,
+/// otherwise [`fit_for_display`]. Returns (image, tiles, reduced); with
+/// tiles, the image is a screen-size preview.
+fn finish(image: ColorImage, opts: DecodeOpts, o: Orientation) -> (ColorImage, Vec<Tile>, bool) {
+    let [w, h] = image.size;
+    if opts.tile && opts.fit.is_none() && (w > opts.max_side || h > opts.max_side) {
+        // Absurdly large: shrink to the memory budget first.
+        let image = match budget_target(image.size, MAX_TILED_BYTES) {
+            Some(t) => downscale(&image, t),
+            None => image,
+        };
+        let preview_target = gpu_target(image.size, 2048.min(opts.max_side)).unwrap_or(image.size);
+        let preview = downscale(&image, preview_target);
+        let tiles = split_tiles(&image, TILE_SIDE.min(opts.max_side));
+        return (preview, tiles, false);
+    }
+    let (image, reduced) = fit_for_display(image, opts, o);
+    (image, Vec::new(), reduced)
+}
+
+fn tiled_size(tiles: &[Tile]) -> [usize; 2] {
+    tiles.iter().fold([0, 0], |[w, h], t| {
+        [w.max(t.x + t.image.size[0]), h.max(t.y + t.image.size[1])]
+    })
+}
+
+/// Size to shrink to so the RGBA pixels fit in `budget` bytes.
+fn budget_target(size: [usize; 2], budget: usize) -> Option<[usize; 2]> {
+    let [w, h] = size;
+    if w * h * 4 <= budget {
+        return None;
+    }
+    let s = (budget as f64 / (w * h * 4) as f64).sqrt();
+    Some([
+        ((w as f64 * s).floor() as usize).max(1),
+        ((h as f64 * s).floor() as usize).max(1),
+    ])
+}
+
+/// Cuts an image into `side`×`side` pieces (smaller at the right and
+/// bottom edges).
+pub fn split_tiles(img: &ColorImage, side: usize) -> Vec<Tile> {
+    let [w, h] = img.size;
+    let side = side.max(1);
+    let mut tiles = Vec::new();
+    for y in (0..h).step_by(side) {
+        let th = side.min(h - y);
+        for x in (0..w).step_by(side) {
+            let tw = side.min(w - x);
+            let mut pixels = Vec::with_capacity(tw * th);
+            for row in y..y + th {
+                pixels.extend_from_slice(&img.pixels[row * w + x..row * w + x + tw]);
+            }
+            tiles.push(Tile {
+                x,
+                y,
+                image: Arc::new(ColorImage::new([tw, th], pixels)),
+            });
+        }
+    }
+    tiles
 }
 
 /// Shrinks a freshly decoded image to screen size (if asked) or to what the
@@ -679,8 +794,8 @@ mod tests {
     #[test]
     fn screen_quality_fits_the_screen_and_is_marked_reduced() {
         let opts = DecodeOpts {
-            max_side: 8192,
             fit: Some([100, 100]),
+            ..DecodeOpts::full(8192)
         };
         let d = decode_bytes(
             &png_bytes(600, 300, [9, 9, 9, 255]),
@@ -740,6 +855,47 @@ mod tests {
             "{:?}",
             out.pixels
         );
+    }
+
+    #[test]
+    fn huge_images_are_tiled_at_full_quality() {
+        let bytes = png_bytes(700, 300, [5, 6, 7, 255]);
+        // GPU limit 256: tiles of 256, no pixel lost.
+        let d = decode_bytes(&bytes, Path::new("a.png"), DecodeOpts::tiled(256)).unwrap();
+        assert!(d.is_tiled());
+        assert_eq!(d.tiles.len(), 3 * 2);
+        assert_eq!(d.texture_size(), [700, 300]);
+        assert!(!d.is_downscaled());
+        assert!(!d.reduced);
+        let last = d.tiles.last().unwrap();
+        assert_eq!((last.x, last.y), (512, 256));
+        assert_eq!(last.image.size, [188, 44]);
+        let covered: usize = d.tiles.iter().map(|t| t.image.pixels.len()).sum();
+        assert_eq!(covered, 700 * 300);
+        // The preview stays within the GPU limit.
+        assert!(d.frames[0].image.size[0] <= 256);
+        // Without tiling it is shrunk as before.
+        let d = decode_bytes(&bytes, Path::new("a.png"), DecodeOpts::full(256)).unwrap();
+        assert!(!d.is_tiled());
+        assert_eq!(d.texture_size(), [256, 110]);
+    }
+
+    #[test]
+    fn split_tiles_keeps_pixels_in_place() {
+        let pixels: Vec<Color32> = (0..15).map(|i| Color32::from_gray(i as u8)).collect();
+        let img = ColorImage::new([5, 3], pixels);
+        let tiles = split_tiles(&img, 2);
+        assert_eq!(tiles.len(), 3 * 2);
+        // Tile at (4, 2) holds the single bottom-right pixel.
+        let t = tiles.iter().find(|t| t.x == 4 && t.y == 2).unwrap();
+        assert_eq!(t.image.pixels, vec![Color32::from_gray(14)]);
+        let t = tiles.iter().find(|t| t.x == 2 && t.y == 0).unwrap();
+        assert_eq!(
+            t.image.pixels,
+            [2, 3, 7, 8].map(Color32::from_gray).to_vec()
+        );
+        assert_eq!(budget_target([100, 100], 40_000), None);
+        assert_eq!(budget_target([200, 100], 40_000), Some([141, 70]));
     }
 
     #[test]
@@ -844,8 +1000,8 @@ mod tests {
         };
         println!("{name}: {:.1} MB", bytes.len() as f64 / 1e6);
         let screen = DecodeOpts {
-            max_side: 16384,
             fit: Some([2560, 1440]),
+            ..DecodeOpts::full(16384)
         };
         for (label, opts) in [("full", DecodeOpts::full(16384)), ("screen", screen)] {
             for _ in 0..3 {

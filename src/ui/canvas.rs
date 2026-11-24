@@ -9,7 +9,7 @@ use crate::app::{MuudApp, VERSION};
 use crate::core::folder;
 use crate::core::keymap::Cmd;
 use crate::core::library::Slot;
-use crate::core::view::{clamp_offset, compose_uvs, corners, zoom_about, ZoomMode};
+use crate::core::view::{clamp_offset, compose_uvs, corners, place_part, zoom_about, ZoomMode};
 use crate::platform;
 use crate::ui::theme::*;
 
@@ -213,24 +213,33 @@ impl MuudApp {
             );
         }
 
-        let textures = &self.textures[&draw_path].handles;
-        let tex = &textures[self.frame_index.min(textures.len() - 1)];
-        let mut mesh = Mesh::with_texture(tex.id());
         let uvs = compose_uvs(
             d.orientation,
             self.view.turns,
             self.view.flip_h,
             self.view.flip_v,
         );
-        for (pos, uv) in corners(dest).into_iter().zip(uvs) {
-            mesh.vertices.push(egui::epaint::Vertex {
-                pos,
-                uv,
-                color: Color32::WHITE,
-            });
+        let tex = &self.textures[&draw_path];
+        if tex.tiles.is_empty() {
+            let frame = &tex.handles[self.frame_index.min(tex.handles.len() - 1)];
+            p.add(quad(frame.id(), corners(dest), uvs));
+        } else {
+            // A huge image: every piece at full resolution, skipping the
+            // ones that are off screen.
+            let unit = [
+                pos2(0.0, 0.0),
+                pos2(1.0, 0.0),
+                pos2(1.0, 1.0),
+                pos2(0.0, 1.0),
+            ];
+            for (part, handle) in &tex.tiles {
+                let at = place_part(corners(dest), uvs, *part);
+                let bounds = Rect::from_points(&at);
+                if bounds.intersects(rect) {
+                    p.add(quad(handle.id(), at, unit));
+                }
+            }
         }
-        mesh.indices.extend([0, 1, 2, 0, 2, 3]);
-        p.add(Shape::mesh(mesh));
     }
 
     fn wheel_navigation(&mut self, ctx: &egui::Context, resp: &egui::Response) {
@@ -336,6 +345,20 @@ impl MuudApp {
         }
         let _ = x1;
     }
+}
+
+/// A textured quad: corners TL, TR, BR, BL and their texture coordinates.
+fn quad(texture: egui::TextureId, at: [Pos2; 4], uvs: [Pos2; 4]) -> Shape {
+    let mut mesh = Mesh::with_texture(texture);
+    for (pos, uv) in at.into_iter().zip(uvs) {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos,
+            uv,
+            color: Color32::WHITE,
+        });
+    }
+    mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+    Shape::mesh(mesh)
 }
 
 /// True if the image is drawn with more screen pixels than its texture has

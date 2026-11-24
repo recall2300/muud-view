@@ -186,6 +186,34 @@ fn corner_indices(turns: u8, flip_h: bool, flip_v: bool) -> [usize; 4] {
     idx
 }
 
+/// Where a piece of the texture lands on screen. `dest` are the screen
+/// corners (TL, TR, BR, BL) of the whole image and `uvs` the texture
+/// coordinates shown there (from [`compose_uvs`]); `part` is the piece in
+/// texture coordinates (0..1). Returns the screen positions of the piece's
+/// corners at texture (min.x, min.y), (max.x, min.y), (max.x, max.y),
+/// (min.x, max.y) — draw them with UVs (0,0), (1,0), (1,1), (0,1).
+pub fn place_part(dest: [Pos2; 4], uvs: [Pos2; 4], part: Rect) -> [Pos2; 4] {
+    // Texture -> screen is affine: solve it from three corners.
+    let du1 = uvs[1] - uvs[0];
+    let du3 = uvs[3] - uvs[0];
+    let dp1 = dest[1] - dest[0];
+    let dp3 = dest[3] - dest[0];
+    let det = du1.x * du3.y - du3.x * du1.y;
+    let map = |uv: Pos2| {
+        let d = uv - uvs[0];
+        // Coordinates of d in the (du1, du3) basis.
+        let a = (d.x * du3.y - du3.x * d.y) / det;
+        let b = (du1.x * d.y - d.x * du1.y) / det;
+        dest[0] + dp1 * a + dp3 * b
+    };
+    [
+        map(part.min),
+        map(pos2(part.max.x, part.min.y)),
+        map(part.max),
+        map(pos2(part.min.x, part.max.y)),
+    ]
+}
+
 pub fn corners(rect: Rect) -> [Pos2; 4] {
     [
         rect.left_top(),
@@ -277,6 +305,47 @@ mod tests {
         assert_eq!(uv[0], pos2(1.0, 0.0));
         let uv = corner_uvs(2, false, false);
         assert_eq!(uv[0], pos2(1.0, 1.0));
+    }
+
+    #[test]
+    fn parts_land_where_the_whole_image_puts_them() {
+        let dest = corners(Rect::from_min_size(
+            pos2(10.0, 20.0),
+            Vec2::new(200.0, 100.0),
+        ));
+        let right_half = Rect::from_min_max(pos2(0.5, 0.0), pos2(1.0, 1.0));
+        // Unrotated: the right half of the texture is the right half on screen.
+        let q = place_part(dest, corner_uvs(0, false, false), right_half);
+        assert_eq!(q[0], pos2(110.0, 20.0));
+        assert_eq!(q[2], pos2(210.0, 120.0));
+        // Mirrored: it moves to the left half, drawn right-to-left.
+        let q = place_part(dest, corner_uvs(0, true, false), right_half);
+        assert_eq!(q[0], pos2(110.0, 20.0));
+        assert_eq!(q[1], pos2(10.0, 20.0));
+        // Rotated clockwise (screen is 200x100, texture is portrait): the
+        // texture's right half becomes the bottom half on screen.
+        let q = place_part(dest, corner_uvs(1, false, false), right_half);
+        let ys: Vec<f32> = q.iter().map(|p| p.y).collect();
+        assert!(
+            ys.iter().all(|y| (70.0 - 0.01..=120.01).contains(y)),
+            "{q:?}"
+        );
+        // The whole texture maps back onto the destination corners.
+        let whole = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        let uvs = corner_uvs(3, true, false);
+        let q = place_part(dest, uvs, whole);
+        for (corner, uv) in [
+            pos2(0.0, 0.0),
+            pos2(1.0, 0.0),
+            pos2(1.0, 1.0),
+            pos2(0.0, 1.0),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let i = uvs.iter().position(|u| u == uv).unwrap();
+            assert_eq!(q[corner], dest[i]);
+        }
     }
 
     #[test]
