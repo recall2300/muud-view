@@ -5,6 +5,7 @@ pub mod history;
 pub mod keymap;
 pub mod library;
 pub mod loader;
+pub mod log;
 pub mod photo_folders;
 pub mod settings;
 pub mod view;

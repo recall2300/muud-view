@@ -1,6 +1,8 @@
 //! OS integration: file dialogs, Explorer, Recycle Bin, clipboard.
 
 pub mod clipboard;
+pub mod integration;
+pub mod single_instance;
 
 use std::path::{Path, PathBuf};
 

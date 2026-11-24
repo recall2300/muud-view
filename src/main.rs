@@ -11,7 +11,45 @@ use std::path::PathBuf;
 use eframe::egui;
 
 fn main() -> eframe::Result {
-    let initial = std::env::args_os().nth(1).map(PathBuf::from);
+    let data_dir = core::log::data_dir();
+    core::log::init(&data_dir);
+
+    // Command-line setup for scripts and IT deployment.
+    let mut args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(flag) = args.first().and_then(|a| a.to_str()).map(str::to_owned) {
+        let result = match flag.as_str() {
+            "--register" => Some(platform::integration::register()),
+            "--unregister" => Some(platform::integration::unregister()),
+            _ => None,
+        };
+        if let Some(r) = result {
+            if let Err(e) = &r {
+                core::log::error(&format!("{flag}: {e}"));
+            }
+            std::process::exit(if r.is_ok() { 0 } else { 1 });
+        }
+    }
+    let initial = (!args.is_empty()).then(|| PathBuf::from(args.remove(0)));
+    let initial = initial.map(|p| std::fs::canonicalize(&p).unwrap_or(p));
+
+    // One window: hand the file to a running viewer if there is one.
+    let ctx_slot: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>> = Default::default();
+    let incoming = if std::env::var_os("MUUD_SCREENSHOT").is_some()
+        || std::env::var_os("MUUD_MULTI").is_some()
+    {
+        None
+    } else {
+        let slot = ctx_slot.clone();
+        let wake = Box::new(move || {
+            if let Some(ctx) = slot.lock().ok().and_then(|s| s.clone()) {
+                ctx.request_repaint();
+            }
+        });
+        match platform::single_instance::start(initial.as_deref(), wake) {
+            platform::single_instance::Role::Handed => return Ok(()),
+            platform::single_instance::Role::Primary(rx) => rx,
+        }
+    };
 
     // MUUD_SIZE=WxH sets the window size (used for README screenshots).
     let size = std::env::var("MUUD_SIZE")
@@ -44,11 +82,13 @@ fn main() -> eframe::Result {
         clipboard_shortcuts: false,
         // The screenshot helper must not restore a saved window size.
         persist_window: std::env::var_os("MUUD_SCREENSHOT").is_none(),
+        persistence_path: platform::integration::portable_data_dir()
+            .map(|d| d.join("settings.ron")),
         ..Default::default()
     };
     eframe::run_native(
         "muud-view",
         options,
-        Box::new(move |cc| Ok(Box::new(app::MuudApp::new(cc, initial)))),
+        Box::new(move |cc| Ok(Box::new(app::MuudApp::new(cc, initial, incoming, ctx_slot)))),
     )
 }

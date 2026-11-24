@@ -130,7 +130,10 @@ impl Library {
         for (path, result) in results {
             let slot = match result {
                 Ok(d) => Slot::Ready(d),
-                Err(e) => Slot::Failed(e),
+                Err(e) => {
+                    super::log::error(&format!("decode {}: {e}", path.display()));
+                    Slot::Failed(e)
+                }
             };
             self.insert(path, slot);
         }

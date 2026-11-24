@@ -59,6 +59,8 @@ pub struct MuudApp {
     /// Messages from background jobs (e.g. clipboard writes), shown as toasts.
     pub(crate) jobs: Vec<std::sync::mpsc::Receiver<String>>,
     pub(crate) paste_count: u32,
+    pub(crate) show_setup: bool,
+    incoming: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
     title: String,
     started: bool,
     pending_open: Option<PathBuf>,
@@ -66,7 +68,15 @@ pub struct MuudApp {
 }
 
 impl MuudApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        initial: Option<PathBuf>,
+        incoming: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
+        ctx_slot: std::sync::Arc<std::sync::Mutex<Option<egui::Context>>>,
+    ) -> Self {
+        if let Ok(mut slot) = ctx_slot.lock() {
+            *slot = Some(cc.egui_ctx.clone());
+        }
         install_fonts(&cc.egui_ctx);
         apply_style(&cc.egui_ctx);
         let mut settings: Settings = cc
@@ -74,6 +84,7 @@ impl MuudApp {
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
         let show = std::env::var("MUUD_SHOW").ok();
+        let show_setup = show.as_deref().is_some_and(|s| s.contains("setup"));
         if let Some(show) = &show {
             settings.show_info = show.contains("info");
             settings.pin_bottom = show.contains("bottom");
@@ -111,6 +122,8 @@ impl MuudApp {
             history: Default::default(),
             jobs: Vec::new(),
             paste_count: 0,
+            show_setup,
+            incoming,
             title: String::new(),
             started: false,
             pending_open: initial,
@@ -234,7 +247,26 @@ impl MuudApp {
     }
 
     pub(crate) fn notify(&mut self, text: impl Into<String>) {
-        self.toast = Some((text.into(), Instant::now()));
+        let text = text.into();
+        if text.contains("FAILED") || text.starts_with("CANNOT") {
+            crate::core::log::error(&text);
+        }
+        self.toast = Some((text, Instant::now()));
+    }
+
+    /// Files sent by a second launch ("Open with" while a window is open).
+    fn poll_incoming(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.incoming else {
+            return;
+        };
+        let requests: Vec<Option<PathBuf>> = rx.try_iter().collect();
+        for req in requests {
+            if let Some(p) = req {
+                self.open(&p);
+            }
+            ctx.send_viewport_cmd(ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(ViewportCommand::Focus);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -367,6 +399,7 @@ impl eframe::App for MuudApp {
 
         self.lib.poll();
         self.poll_jobs();
+        self.poll_incoming(&ctx);
         self.handle_drops(&ctx);
         self.handle_keys(&ctx);
         self.tick(&ctx);
@@ -433,6 +466,9 @@ impl eframe::App for MuudApp {
         }
 
         self.overlays(&ctx);
+        if self.show_setup {
+            self.setup_sheet(&ctx);
+        }
         self.screenshot(&ctx);
     }
 

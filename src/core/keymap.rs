@@ -47,6 +47,7 @@ pub enum Cmd {
     PinTop,
     PinBottom,
     CopyResized,
+    Setup,
     Paste,
     CopyToFolder(u8),
     MoveToFolder(u8),
@@ -138,6 +139,7 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
             K::Delete => Trash,
             K::Insert => CopyToFolder(1),
             K::F1 => Help,
+            K::F5 => Setup,
             K::Backtick => PinTop,
             _ => return None,
         }
@@ -277,6 +279,7 @@ pub const HELP: &[HelpSection] = &[
             ("CTRL+ENTER", "SHOW IN EXPLORER"),
             ("DEL / SHIFT+DEL", "RECYCLE / DELETE"),
             ("CTRL+Z", "UNDO MOVE / DELETE"),
+            ("F5", "SETUP · WINDOWS"),
             ("ESC  X  CTRL+W", "EXIT"),
         ],
     ),

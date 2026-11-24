@@ -276,6 +276,7 @@ impl MuudApp {
                 }
             }
             Cmd::Help => self.show_help = !self.show_help,
+            Cmd::Setup => self.show_setup = !self.show_setup,
             Cmd::PinTop => {
                 self.settings.pin_top = !self.settings.pin_top;
                 self.notify(if self.settings.pin_top {
@@ -327,6 +328,23 @@ impl MuudApp {
                     }
                     egui::Key::Escape | egui::Key::N => self.confirm_delete = false,
                     _ => {}
+                }
+                continue;
+            }
+            if self.show_setup {
+                use crate::ui::setup::ACTIONS;
+                let n = match key {
+                    egui::Key::Num1 => Some(0),
+                    egui::Key::Num2 => Some(1),
+                    egui::Key::Num3 => Some(2),
+                    egui::Key::Num4 => Some(3),
+                    egui::Key::Num5 => Some(4),
+                    _ => None,
+                };
+                if let Some(i) = n {
+                    self.run_setup(ctx, ACTIONS[i].0);
+                } else if matches!(key, egui::Key::Escape | egui::Key::F5) {
+                    self.show_setup = false;
                 }
                 continue;
             }
