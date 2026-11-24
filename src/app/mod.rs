@@ -73,6 +73,11 @@ pub struct MuudApp {
     pub(crate) view: View,
     pub(crate) last_scale: f32,
     pub(crate) last_canvas: Rect,
+    /// Where the image was drawn last frame (for copying the visible area).
+    pub(crate) last_dest: Option<Rect>,
+    /// A drag out of the window just ended: tell egui the button is up
+    /// (the shell's drag loop swallowed the release).
+    pub(crate) release_after_drag: Option<Pos2>,
     pub(crate) frame_index: usize,
     pub(crate) next_frame_at: Option<Instant>,
     pub(crate) slideshow: Option<(Duration, Instant)>,
@@ -193,6 +198,8 @@ impl MuudApp {
             view: start_view,
             last_scale: 1.0,
             last_canvas: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
+            last_dest: None,
+            release_after_drag: None,
             frame_index: 0,
             next_frame_at: None,
             slideshow: None,
@@ -752,6 +759,17 @@ fn continues(old: &crate::core::decode::Decoded, new: &crate::core::decode::Deco
 }
 
 impl eframe::App for MuudApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(pos) = self.release_after_drag.take() {
+            raw.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if !self.started {

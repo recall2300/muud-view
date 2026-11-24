@@ -154,6 +154,39 @@ impl MuudApp {
                     Err(e) => format!("SHARE FAILED · {e}"),
                 });
             }
+            Cmd::CopyVisible => {
+                let (Some(path), Some(dest)) = (self.lib.current().cloned(), self.last_dest) else {
+                    return;
+                };
+                if !path.exists() {
+                    return;
+                }
+                let part = crate::core::view::visible_part(dest, self.last_canvas);
+                let (turns, fh, fv) = (self.view.turns, self.view.flip_h, self.view.flip_v);
+                self.spawn_job(ctx, move || {
+                    let opts = crate::core::decode::DecodeOpts::full(1 << 15);
+                    let d = match crate::core::loader::decode_file(&path, opts) {
+                        Ok(d) => d,
+                        Err(e) => return format!("COPY FAILED · {e}"),
+                    };
+                    let stored = &d.frames[0].image;
+                    let uvs = crate::core::view::compose_uvs(d.orientation, turns, fh, fv);
+                    // Output pixels: the visible share of the drawn image at
+                    // its decoded resolution.
+                    let [sw, sh] = stored.size;
+                    let swap = d.orientation.swaps_axes() ^ (turns % 2 == 1);
+                    let (dw, dh) = if swap { (sh, sw) } else { (sw, sh) };
+                    let size = [
+                        (part.width() * dw as f32).round() as usize,
+                        (part.height() * dh as f32).round() as usize,
+                    ];
+                    let img = crate::core::pixel::crop_drawn(stored, uvs, part, size);
+                    match crate::platform::clipboard::write(Some(&img), &[]) {
+                        Ok(()) => format!("COPIED VISIBLE AREA · {} × {}", size[0], size[1]),
+                        Err(e) => format!("COPY FAILED · {e}"),
+                    }
+                });
+            }
             Cmd::PixelInfo => {
                 self.pixel_info = !self.pixel_info;
                 self.notify(if self.pixel_info {

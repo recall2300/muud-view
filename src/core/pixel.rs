@@ -1,6 +1,6 @@
 //! Pixel readout: which image pixel is under the cursor and its colour.
 
-use eframe::egui::Pos2;
+use eframe::egui::{ColorImage, Pos2, Rect};
 
 use super::decode::Decoded;
 
@@ -51,6 +51,29 @@ pub fn sample(d: &Decoded, frame: usize, uv: Pos2) -> Option<[u8; 4]> {
         img.pixels[y * img.size[0] + x]
     };
     Some(c.to_srgba_unmultiplied())
+}
+
+/// Cuts `part` (0..1 of the image as drawn, after rotation and flips) out
+/// of the stored pixels, at `size` output pixels. `uvs` are the texture
+/// coordinates at the drawn corners, as used for drawing, so the copy is
+/// exactly what is on screen.
+pub fn crop_drawn(stored: &ColorImage, uvs: [Pos2; 4], part: Rect, size: [usize; 2]) -> ColorImage {
+    let [sw, sh] = stored.size;
+    let [ow, oh] = [size[0].max(1), size[1].max(1)];
+    let du = uvs[1] - uvs[0];
+    let dv = uvs[3] - uvs[0];
+    let mut out = Vec::with_capacity(ow * oh);
+    for j in 0..oh {
+        let y = part.min.y + (j as f32 + 0.5) / oh as f32 * part.height();
+        for i in 0..ow {
+            let x = part.min.x + (i as f32 + 0.5) / ow as f32 * part.width();
+            let uv = uvs[0] + du * x + dv * y;
+            let sx = ((uv.x * sw as f32) as usize).min(sw - 1);
+            let sy = ((uv.y * sh as f32) as usize).min(sh - 1);
+            out.push(stored.pixels[sy * sw + sx]);
+        }
+    }
+    ColorImage::new([ow, oh], out)
 }
 
 pub fn hex([r, g, b, a]: [u8; 4]) -> String {
@@ -105,6 +128,28 @@ mod tests {
                 assert!((back - part.min).length() < 1e-4, "{turns} {flip} {back:?}");
             }
         }
+    }
+
+    #[test]
+    fn crop_matches_what_is_drawn() {
+        // 4x2 stored image, pixel value = its index.
+        let px: Vec<Color32> = (0..8).map(|i| Color32::from_gray(i * 10)).collect();
+        let img = ColorImage::new([4, 2], px);
+        // Unrotated: the right half.
+        let right = Rect::from_min_max(pos2(0.5, 0.0), pos2(1.0, 1.0));
+        let c = crop_drawn(&img, UNIT, right, [2, 2]);
+        assert_eq!(
+            c.pixels,
+            [2, 3, 6, 7].map(|i| Color32::from_gray(i * 10)).to_vec()
+        );
+        // Rotated clockwise the drawn image is 2 wide, 4 tall; its top half
+        // is the stored left half, turned.
+        let uvs = corner_uvs(1, false, false);
+        let top = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 0.5));
+        let c = crop_drawn(&img, uvs, top, [2, 2]);
+        let up = crate::core::decode::upright(&img, crate::core::decode::Orientation::from_exif(6));
+        assert_eq!(up.size, [2, 4]);
+        assert_eq!(c.pixels, up.pixels[..4].to_vec());
     }
 
     #[test]

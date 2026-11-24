@@ -71,6 +71,7 @@ impl MuudApp {
         } else {
             full
         };
+        self.last_dest = None;
         let draw_path = match &cmp {
             Some((a, _, _)) => Some(a.clone()),
             None => self.shown.clone(),
@@ -182,6 +183,22 @@ impl MuudApp {
             }
         }
 
+        // Dragging the image when there is nothing to pan (or with Ctrl)
+        // drags the file out of the window: into a mail, a messenger,
+        // Explorer.
+        let pannable = shown.x > rect.width() + 0.5 || shown.y > rect.height() + 0.5;
+        let ctrl = ctx.input(|i| i.modifiers.ctrl);
+        if resp.drag_started_by(PointerButton::Primary)
+            && cmp.is_none()
+            && (!pannable || ctrl)
+            && cur.as_ref() == Some(&draw_path)
+            && draw_path.exists()
+        {
+            platform::drag::drag_file(&draw_path);
+            self.release_after_drag = Some(pointer.unwrap_or(rect.center()));
+            ctx.request_repaint();
+        }
+
         // Slider: dragging near the divider moves it instead of the image.
         let mut moving_split = false;
         if let (Some((_, CompareMode::Slider, split)), Some(c)) = (&cmp, self.compare.as_mut()) {
@@ -244,6 +261,7 @@ impl MuudApp {
         let min = center - shown / 2.0;
         let min = pos2((min.x * ppp).round() / ppp, (min.y * ppp).round() / ppp);
         let dest = Rect::from_min_size(min, shown);
+        self.last_dest = Some(dest);
 
         // Side by side: A stays in its half.
         let p = if side { p.with_clip_rect(rect) } else { p };

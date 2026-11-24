@@ -68,6 +68,8 @@ const KO: &[(&str, &str)] = &[
     ("COPIED", "복사됨"),
     ("ORIGINAL", "원본"),
     ("SAVE FOR SHARING", "공유용으로 저장"),
+    ("COPY VISIBLE AREA", "보이는 영역 복사"),
+    ("COPIED VISIBLE AREA", "보이는 영역 복사됨"),
     ("SHARE COPY SIZE", "공유용 크기"),
     ("SAVED FOR SHARING", "공유용으로 저장됨 · 붙여 넣기 가능"),
     ("SHARE FAILED", "공유용 저장 실패"),

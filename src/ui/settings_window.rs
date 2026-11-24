@@ -76,6 +76,7 @@ pub fn cmd_label(cmd: Cmd) -> String {
                 Cmd::CompareMode => "비교 보기 바꾸기",
                 Cmd::PixelInfo => "픽셀 정보",
                 Cmd::ShareCopy => "공유용으로 저장",
+                Cmd::CopyVisible => "보이는 영역 복사",
                 Cmd::PinTop => "상단 바 고정",
                 Cmd::PinBottom => "하단 바 고정",
                 Cmd::RotateCw => "시계 방향 회전",

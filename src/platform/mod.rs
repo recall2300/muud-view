@@ -1,6 +1,7 @@
 //! OS integration: file dialogs, Explorer, Recycle Bin, clipboard.
 
 pub mod clipboard;
+pub mod drag;
 pub mod integration;
 pub mod single_instance;
 
