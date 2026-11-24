@@ -24,7 +24,11 @@
 
 1. [Releases](https://github.com/recall2300/muud-view/releases)에서 `muud-view-vX.Y.Z-windows-x64.zip`을 받아 원하는 폴더에 풉니다.
 2. `muud-view.exe`를 실행하거나, 이미지를 창에 끌어다 놓습니다.
-3. 기본 뷰어로 쓰려면: 이미지 파일 우클릭 → **연결 프로그램** → **다른 앱 선택** → `muud-view.exe` → **항상 사용**.
+3. 기본 뷰어로 쓰려면: muud view에서 `F5` → `1 SET AS IMAGE VIEWER` → 열리는 Windows 기본 앱 화면에서 muud view 선택.
+   우클릭 메뉴("muud view로 열기", "muud view로 폴더 보기")도 함께 등록되고, `F5` → `3`으로 모두 지울 수 있습니다.
+   관리자 권한은 필요 없습니다. 스크립트로는 `muud-view.exe --register` / `--unregister`.
+4. 창이 열려 있을 때 다른 사진을 열면 새 창 대신 기존 창에서 열립니다.
+5. USB나 공용 PC에서 쓰려면 exe 옆에 `portable`이라는 빈 파일을 만드세요. 설정과 로그가 exe 옆 `muud-view-data` 폴더에 저장됩니다.
 
 ### "Windows의 PC 보호" 경고가 뜨면
 
@@ -67,9 +71,12 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 배경 (검정·종이·회색) | `B` |
 | 상단 / 하단 바 고정 | `` ` `` / `~` (해제하면 마우스를 가까이 가져갈 때만 표시) |
 | 열기 | `Ctrl+O` `F2` 파일, `F` 폴더 |
+| 설정 · Windows 통합 · 진단 | `F5` |
 | 종료 | `Esc` `X` `Ctrl+W` |
 
-전체 목록은 [docs/SPEC.md](docs/SPEC.md), 이후 계획은 [docs/ROADMAP.md](docs/ROADMAP.md)에 있습니다.
+전체 목록은 [docs/SPEC.md](docs/SPEC.md), 계획은 [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PLAN.md](docs/PLAN.md), 진행 기록은 [docs/PROGRESS.md](docs/PROGRESS.md)에 있습니다.
+
+문제가 생기면 `F5` → `4 COPY DIAGNOSTICS`로 진단 정보를 복사해 [이슈](https://github.com/recall2300/muud-view/issues/new?template=bug_report.md)에 붙여 주세요.
 
 ## 라이선스
 
