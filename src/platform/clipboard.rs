@@ -70,11 +70,12 @@ fn wide(p: &Path) -> Vec<u16> {
 /// Puts an image and/or files on the clipboard, replacing what was there.
 #[cfg(windows)]
 pub fn write(image: Option<&ColorImage>, files: &[PathBuf]) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::GlobalFree;
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
     use windows_sys::Win32::System::Memory::{
-        GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+        GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
     };
     const CF_DIB: u32 = 8;
     const CF_HDROP: u32 = 15;
