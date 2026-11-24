@@ -1,3 +1,4 @@
+pub mod bottom_bar;
 pub mod canvas;
 pub mod info_panel;
 pub mod overlays;

@@ -177,6 +177,22 @@ impl MuudApp {
                 }
             }
             Cmd::Help => self.show_help = !self.show_help,
+            Cmd::PinTop => {
+                self.settings.pin_top = !self.settings.pin_top;
+                self.notify(if self.settings.pin_top {
+                    "TOP BAR PINNED"
+                } else {
+                    "TOP BAR AUTO-HIDE"
+                });
+            }
+            Cmd::PinBottom => {
+                self.settings.pin_bottom = !self.settings.pin_bottom;
+                self.notify(if self.settings.pin_bottom {
+                    "BOTTOM BAR PINNED"
+                } else {
+                    "BOTTOM BAR AUTO-HIDE"
+                });
+            }
         }
     }
 

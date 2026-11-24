@@ -62,6 +62,7 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 휴지통 / 완전 삭제 | `Delete` / `Shift+Delete` (확인 후) |
 | 슬라이드쇼 | `Ctrl+1`…`Ctrl+9` 초 간격, `Ctrl+0` 정지 |
 | 배경 (검정·종이·회색) | `B` |
+| 상단 / 하단 바 고정 | `` ` `` / `~` (해제하면 마우스를 가까이 가져갈 때만 표시) |
 | 열기 | `Ctrl+O` `F2` 파일, `F` 폴더 |
 | 종료 | `Esc` `X` `Ctrl+W` |
 

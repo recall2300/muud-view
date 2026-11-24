@@ -1,6 +1,6 @@
 //! The top bar: position, file name and status pills.
 
-use eframe::egui::{self, pos2, vec2, Align2};
+use eframe::egui::{self, pos2, vec2, Align2, Rect};
 
 use crate::app::MuudApp;
 use crate::core::folder;
@@ -43,8 +43,7 @@ impl MuudApp {
         v
     }
 
-    pub(crate) fn top_bar(&self, ui: &mut egui::Ui) {
-        let rect = ui.max_rect();
+    pub(crate) fn top_bar(&self, ui: &mut egui::Ui, rect: Rect) {
         let p = ui.painter();
         p.line_segment(
             [
@@ -58,7 +57,12 @@ impl MuudApp {
         let brand = p.layout_no_wrap("MUUD VIEW".into(), grotesk(14.0), INK);
         let brand_x = rect.right() - 16.0 - brand.size().x;
         p.galley(pos2(brand_x, cy - brand.size().y / 2.0), brand, INK);
-        let hint = p.layout_no_wrap("F1 KEYS".into(), mono(11.0), MUTED);
+        let hint_text = if self.settings.pin_top {
+            "F1 KEYS"
+        } else {
+            "F1 KEYS · ` PIN"
+        };
+        let hint = p.layout_no_wrap(hint_text.into(), mono(11.0), MUTED);
         let hint_x = brand_x - 14.0 - hint.size().x;
         p.galley(pos2(hint_x, cy - hint.size().y / 2.0), hint, MUTED);
         let right_limit = hint_x - 18.0;

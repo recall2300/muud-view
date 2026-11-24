@@ -44,6 +44,8 @@ pub enum Cmd {
     Slideshow(u8),
     StopSlideshow,
     Help,
+    PinTop,
+    PinBottom,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -125,6 +127,7 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
             K::Tab => ToggleInfo,
             K::Delete => Trash,
             K::F1 => Help,
+            K::Backtick => PinTop,
             _ => return None,
         }
     } else if is(CTRL) {
@@ -156,7 +159,8 @@ pub fn command_for(key: Key, mods: Modifiers) -> Option<Cmd> {
         match key {
             K::Space => Prev,
             K::Delete => DeletePermanently,
-            K::Num8 => Original, // `*` on a US keyboard
+            K::Num8 => Original,      // `*` on a US keyboard
+            K::Backtick => PinBottom, // `~`
             _ => return None,
         }
     } else if is(ALT) {
@@ -211,6 +215,7 @@ pub const HELP: &[HelpSection] = &[
             ("I / U", "SMOOTH / PIXEL"),
             ("B", "BACKGROUND"),
             ("TAB", "INFO PANEL"),
+            ("` / ~", "PIN TOP / BOTTOM BAR"),
         ],
     ),
     (
@@ -300,6 +305,18 @@ mod tests {
         assert_eq!(
             command_for(Key::Minus, mods(false, false, false)),
             Some(Cmd::ZoomOut)
+        );
+    }
+
+    #[test]
+    fn pin_keys() {
+        assert_eq!(
+            command_for(Key::Backtick, mods(false, false, false)),
+            Some(Cmd::PinTop)
+        );
+        assert_eq!(
+            command_for(Key::Backtick, mods(false, true, false)),
+            Some(Cmd::PinBottom)
         );
     }
 

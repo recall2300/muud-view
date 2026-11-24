@@ -17,10 +17,12 @@ use crate::core::library::Library;
 use crate::core::loader::Loader;
 use crate::core::settings::{Background, Settings};
 use crate::core::view::{View, ZoomMode};
+use crate::ui::bottom_bar::{BarState, Edge};
 use crate::ui::theme::{apply_style, install_fonts, CANVAS_GRAY, CANVAS_INK, INK, PAPER};
 
 pub const CACHE_BUDGET: usize = 1024 * 1024 * 1024;
 pub const TOP_BAR: f32 = 40.0;
+pub const BOTTOM_BAR: f32 = 48.0;
 pub const INFO_W: f32 = 340.0;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -52,6 +54,7 @@ pub struct MuudApp {
     pub(crate) checker: Option<TextureHandle>,
     pub(crate) last_dir: Option<PathBuf>,
     pub(crate) open_error: Option<String>,
+    pub(crate) bars: BarState,
     title: String,
     started: bool,
     pending_open: Option<PathBuf>,
@@ -100,6 +103,7 @@ impl MuudApp {
             checker: None,
             last_dir: None,
             open_error: None,
+            bars: BarState::default(),
             title: String::new(),
             started: false,
             pending_open: initial,
@@ -315,13 +319,31 @@ impl eframe::App for MuudApp {
         self.update_title(&ctx);
 
         let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-        if !fullscreen {
+        let empty = self.lib.is_empty();
+        // In fullscreen both bars only fade in on demand.
+        let pin_top = !fullscreen && (self.settings.pin_top || empty);
+        let pin_bottom = !fullscreen && !empty && self.settings.pin_bottom;
+        if pin_top {
             Panel::top("top")
                 .exact_size(TOP_BAR)
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(egui::Frame::new().fill(PAPER))
-                .show(ui, |ui| self.top_bar(ui));
+                .show(ui, |ui| {
+                    let r = ui.max_rect();
+                    self.top_bar(ui, r)
+                });
+        }
+        if pin_bottom {
+            Panel::bottom("bottom")
+                .exact_size(BOTTOM_BAR)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(PAPER))
+                .show(ui, |ui| {
+                    let r = ui.max_rect();
+                    self.bottom_bar(ui, r)
+                });
         }
         if self.settings.show_info && self.lib.current_decoded().is_some() {
             Panel::right("info")
@@ -335,6 +357,25 @@ impl eframe::App for MuudApp {
         CentralPanel::no_frame()
             .frame(egui::Frame::new().fill(bg))
             .show(ui, |ui| self.canvas(ui));
+
+        if !pin_top {
+            let a = self.bar_opacity(&ctx, Edge::Top);
+            if a > 0.01 {
+                self.floating_bar(&ctx, Edge::Top, a);
+            }
+        }
+        if !pin_bottom && !empty {
+            let a = self.bar_opacity(&ctx, Edge::Bottom);
+            if a > 0.01 {
+                self.floating_bar(&ctx, Edge::Bottom, a);
+            } else {
+                let p = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Middle,
+                    egui::Id::unique("progress-line"),
+                ));
+                self.progress_line(&p, self.last_canvas);
+            }
+        }
 
         self.overlays(&ctx);
         self.screenshot(&ctx);
