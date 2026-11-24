@@ -76,6 +76,7 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 다음 / 이전 폴더·압축파일 | `]` / `[` |
 | 두 쪽 보기 (왼쪽부터·오른쪽부터) / 웹툰 | `D` / `W` |
 | 회전 저장 (JPEG, 화질 그대로) | `Ctrl+Shift+S` |
+| 바탕화면으로 / 외부 편집기 / 인쇄 | `Ctrl+Alt+W` / `Ctrl+E` / `Ctrl+P` |
 | 별표 / 별표만 보기 | `S` / `Shift+S` |
 | 파일을 창 밖으로 끌기 (메일·메신저) | 맞춤 보기에서 드래그, 또는 `Ctrl`+드래그 |
 | 복사: 이미지+파일 / 작게 / EXIF / 경로 | `Ctrl+C` / `Ctrl+Alt+C` / `Ctrl+Shift+C` / `Ctrl+Alt+Shift+C` |

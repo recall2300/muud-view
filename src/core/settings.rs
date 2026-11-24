@@ -82,6 +82,8 @@ pub struct Settings {
     pub minimap: bool,
     /// Long side of "save for sharing" copies (0 = original size).
     pub share_size: u32,
+    /// Program for `Ctrl+E`; `None` uses the system's default editor.
+    pub editor: Option<std::path::PathBuf>,
 }
 
 impl Default for Settings {
@@ -113,6 +115,7 @@ impl Default for Settings {
             color_manage: true,
             minimap: true,
             share_size: 2048,
+            editor: None,
         }
     }
 }

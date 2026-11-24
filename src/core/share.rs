@@ -41,6 +41,11 @@ pub fn fit(size: [usize; 2], max: u32) -> [usize; 2] {
 /// Encodes without any metadata: JPEG (quality 88) for opaque images, PNG
 /// when there is transparency.
 pub fn encode(img: &ColorImage, png: bool) -> Result<Vec<u8>, String> {
+    encode_q(img, png, 88)
+}
+
+/// Like [`encode`], with a JPEG quality.
+pub fn encode_q(img: &ColorImage, png: bool, quality: u8) -> Result<Vec<u8>, String> {
     let [w, h] = img.size;
     let mut out = Vec::new();
     if png {
@@ -60,15 +65,17 @@ pub fn encode(img: &ColorImage, png: bool) -> Result<Vec<u8>, String> {
             .flat_map(|p| [p.r(), p.g(), p.b()])
             .collect();
         let buf = image::RgbImage::from_raw(w as u32, h as u32, rgb).ok_or("buffer")?;
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 88)
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
             .encode_image(&buf)
             .map_err(|e| e.to_string())?;
     }
     Ok(out)
 }
 
-/// Writes the sharing copy of `src` next to it and returns its path.
-pub fn export(src: &Path, max: u32) -> Result<PathBuf, String> {
+/// Decodes `src` (a file or an archive entry) to upright sRGB pixels with
+/// the long side at most `max` (0 = full size). Returns the pixels and
+/// whether they have transparency.
+pub fn upright_pixels(src: &Path, max: u32) -> Result<(ColorImage, bool), String> {
     let d = super::loader::decode_file(src, DecodeOpts::full(1 << 15))?;
     let frame = &d.frames.first().ok_or("no image")?.image;
     let img = upright(frame, d.orientation);
@@ -76,7 +83,24 @@ pub fn export(src: &Path, max: u32) -> Result<PathBuf, String> {
         t if t != img.size => downscale(&img, t),
         _ => img,
     };
-    let png = d.has_alpha;
+    Ok((img, d.has_alpha))
+}
+
+/// A full-size upright copy as `dir/stem.jpg` (or `.png`), for programs
+/// that ignore EXIF rotation or cannot read the original format (the
+/// desktop wallpaper, printing). Overwrites an earlier copy of that name.
+pub fn upright_copy(src: &Path, dir: &Path, stem: &str) -> Result<PathBuf, String> {
+    let (img, png) = upright_pixels(src, 0)?;
+    let bytes = encode_q(&img, png, 95)?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let target = dir.join(format!("{stem}.{}", if png { "png" } else { "jpg" }));
+    std::fs::write(&target, bytes).map_err(|e| e.to_string())?;
+    Ok(target)
+}
+
+/// Writes the sharing copy of `src` next to it and returns its path.
+pub fn export(src: &Path, max: u32) -> Result<PathBuf, String> {
+    let (img, png) = upright_pixels(src, max)?;
     let bytes = encode(&img, png)?;
     let dir = src.parent().ok_or("no folder")?;
     let target = super::photo_folders::unique_target(dir, &share_name(src, png));
@@ -113,6 +137,18 @@ mod tests {
         out.extend_from_slice(&app1);
         out.extend_from_slice(&plain[2..]);
         out
+    }
+
+    #[test]
+    fn upright_copy_turns_the_pixels() {
+        let dir = crate::core::archive::tests::temp_dir("upright");
+        let src = dir.join("photo.jpg");
+        std::fs::write(&src, jpeg_with_exif()).unwrap();
+        let out = upright_copy(&src, &dir.join("print"), "photo").unwrap();
+        assert_eq!(out, dir.join("print").join("photo.jpg"));
+        let img = image::load_from_memory(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!((img.width(), img.height()), (200, 400));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

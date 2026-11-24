@@ -28,6 +28,7 @@ impl MuudApp {
                 | Cmd::Rename
                 | Cmd::ShareCopy
                 | Cmd::SaveRotation
+                | Cmd::ExternalEditor
         );
         if changes_file
             && self
@@ -221,6 +222,54 @@ impl MuudApp {
                         Err(e) => format!("COPY FAILED · {e}"),
                     }
                 });
+            }
+            Cmd::SetWallpaper | Cmd::Print => {
+                let Some(path) = self.lib.current().cloned() else {
+                    return;
+                };
+                let print = cmd == Cmd::Print;
+                let dir =
+                    crate::core::log::data_dir().join(if print { "print" } else { "wallpaper" });
+                let stem = if print {
+                    path.file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "print".into())
+                } else {
+                    "wallpaper".into()
+                };
+                // An upright copy, so rotation is right and any format works.
+                self.spawn_job(ctx, move || {
+                    let result =
+                        crate::core::share::upright_copy(&path, &dir, &stem).and_then(|copy| {
+                            if print {
+                                platform::shell_verb(&copy, "print")
+                            } else {
+                                platform::set_wallpaper(&copy)
+                            }
+                        });
+                    match (result, print) {
+                        (Ok(()), true) => String::new(),
+                        (Ok(()), false) => "WALLPAPER SET".into(),
+                        (Err(e), true) => format!("PRINT FAILED · {e}"),
+                        (Err(e), false) => format!("WALLPAPER FAILED · {e}"),
+                    }
+                });
+            }
+            Cmd::ExternalEditor => {
+                let Some(path) = self.lib.current().cloned() else {
+                    return;
+                };
+                let result = match &self.settings.editor {
+                    Some(editor) => std::process::Command::new(editor)
+                        .arg(&path)
+                        .spawn()
+                        .map(|_| ())
+                        .map_err(|e| e.to_string()),
+                    None => platform::shell_verb(&path, "edit"),
+                };
+                if let Err(e) = result {
+                    self.notify(format!("EDITOR FAILED · {e}"));
+                }
             }
             Cmd::SaveRotation => {
                 let (Some(path), Some(d)) = (

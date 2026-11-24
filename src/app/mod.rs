@@ -488,7 +488,9 @@ impl MuudApp {
             Err(std::sync::mpsc::TryRecvError::Empty) => true,
             Err(_) => false,
         });
-        for msg in done {
+        // An empty message means "done, nothing to say" (e.g. printing,
+        // where Windows shows its own dialog).
+        for msg in done.into_iter().filter(|m| !m.is_empty()) {
             self.notify(msg);
         }
     }

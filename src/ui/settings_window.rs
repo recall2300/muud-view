@@ -85,6 +85,9 @@ pub fn cmd_label(cmd: Cmd) -> String {
                 Cmd::TwoPage => "두 쪽 보기",
                 Cmd::Webtoon => "웹툰 보기",
                 Cmd::SaveRotation => "회전 저장 (무손실)",
+                Cmd::SetWallpaper => "바탕화면으로 설정",
+                Cmd::ExternalEditor => "외부 편집기로 열기",
+                Cmd::Print => "인쇄",
                 Cmd::PinTop => "상단 바 고정",
                 Cmd::PinBottom => "하단 바 고정",
                 Cmd::RotateCw => "시계 방향 회전",
@@ -301,6 +304,29 @@ impl MuudApp {
             .iter()
             .position(|s| *s == self.settings.share_size)
             .unwrap_or(1);
+        let editor_name = self
+            .settings
+            .editor
+            .as_ref()
+            .map(|p| crate::core::folder::file_name(p))
+            .unwrap_or_else(|| tr("DEFAULT").to_string());
+        let current = editor_name.clone();
+        if let Some(i) = choice_row(
+            ui,
+            "EXTERNAL EDITOR",
+            &[&current, tr("CHOOSE …"), tr("DEFAULT")],
+            0,
+        ) {
+            match i {
+                1 => {
+                    if let Some(p) = crate::platform::pick_program() {
+                        self.settings.editor = Some(p);
+                    }
+                }
+                2 => self.settings.editor = None,
+                _ => {}
+            }
+        }
         if let Some(i) = choice_row(
             ui,
             "SHARE COPY SIZE",
