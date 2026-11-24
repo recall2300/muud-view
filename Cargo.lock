@@ -1607,6 +1607,7 @@ dependencies = [
  "eframe",
  "image",
  "kamadak-exif",
+ "moxcms",
  "rfd",
  "serde",
  "trash",

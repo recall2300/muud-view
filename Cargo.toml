@@ -43,6 +43,8 @@ bytemuck = "1"
 ecolor = { version = "0.37", features = ["bytemuck"] }
 arboard = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# ICC colour management (BSD-3-Clause OR Apache-2.0); already used by `image`.
+moxcms = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 rfd = "0.18"

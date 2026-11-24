@@ -103,6 +103,7 @@ const KO: &[(&str, &str)] = &[
     ("GRAY", "회색"),
     ("SMOOTH SCALING", "부드럽게 확대"),
     ("STRETCH SMALL IMAGES", "작은 이미지 늘리기"),
+    ("COLOR PROFILE", "색 프로파일"),
     ("TOP BAR", "상단 바"),
     ("BOTTOM BAR", "하단 바"),
     ("PINNED", "고정"),

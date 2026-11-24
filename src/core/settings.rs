@@ -76,6 +76,8 @@ pub struct Settings {
     pub sort_desc: bool,
     pub lang: Lang,
     pub dark: bool,
+    /// Convert images with an embedded ICC profile to sRGB.
+    pub color_manage: bool,
 }
 
 impl Default for Settings {
@@ -104,6 +106,7 @@ impl Default for Settings {
             sort_desc: false,
             lang: Lang::Ko,
             dark: false,
+            color_manage: true,
         }
     }
 }

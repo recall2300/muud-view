@@ -30,6 +30,8 @@ pub struct DecodeOpts {
     /// Images larger than `max_side` are split into tiles instead of being
     /// shrunk (full quality only).
     pub tile: bool,
+    /// Convert colours from an embedded ICC profile to sRGB.
+    pub color: bool,
 }
 
 impl DecodeOpts {
@@ -39,6 +41,7 @@ impl DecodeOpts {
             max_side,
             fit: None,
             tile: false,
+            color: true,
         }
     }
 
@@ -122,6 +125,10 @@ pub struct Decoded {
     pub tiles: Vec<Tile>,
     /// Stored size covered by `tiles`.
     pub tiled_size: [usize; 2],
+    /// Name of the embedded colour profile, if any.
+    pub profile: Option<String>,
+    /// Colours were converted from that profile to sRGB.
+    pub color_converted: bool,
 }
 
 impl Decoded {
@@ -181,6 +188,8 @@ impl Decoded {
             reduced: false,
             tiles: Vec::new(),
             tiled_size: [0, 0],
+            profile: None,
+            color_converted: false,
         }
     }
 }
@@ -243,6 +252,8 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
             reduced,
             tiles: Vec::new(),
             tiled_size: [0, 0],
+            profile: None,
+            color_converted: false,
         });
     }
 
@@ -255,6 +266,11 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
     let color = decoder.color_type();
+    let icc = if opts.color {
+        decoder.icc_profile().ok().flatten()
+    } else {
+        None
+    };
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
     img.apply_orientation(orientation);
 
@@ -267,8 +283,9 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
         // Opaque: premultiplied and unmultiplied are identical, skip the maths.
         opaque_color_image(img)
     };
-    let (image, tiles, reduced) = finish(image, opts, Orientation::default());
+    let (mut image, mut tiles, reduced) = finish(image, opts, Orientation::default());
     let tiled_size = tiled_size(&tiles);
+    let (profile, color_converted) = manage_color(icc.as_deref(), &mut image, &mut tiles);
 
     let histogram = histogram_of(&image);
     let alpha = color.has_alpha() && has_alpha(&image);
@@ -291,6 +308,8 @@ pub fn decode_bytes(bytes: &[u8], path: &Path, opts: DecodeOpts) -> Result<Decod
         reduced,
         tiles,
         tiled_size,
+        profile,
+        color_converted,
     })
 }
 
@@ -313,12 +332,14 @@ fn decode_jpeg(
     dec.decode_headers().map_err(|e| format!("{e:?}"))?;
     let (w, h) = dec.dimensions().ok_or("no dimensions")?;
     let gray = matches!(dec.input_colorspace(), Some(ColorSpace::Luma));
+    let icc = if opts.color { dec.icc_profile() } else { None };
     let mut pixels = vec![Color32::BLACK; w * h];
     dec.decode_into(bytemuck::cast_slice_mut(&mut pixels))
         .map_err(|e| format!("{e:?}"))?;
     let image = ColorImage::new([w, h], pixels);
-    let (image, tiles, reduced) = finish(image, opts, orientation);
+    let (mut image, mut tiles, reduced) = finish(image, opts, orientation);
     let tiled_size = tiled_size(&tiles);
+    let (profile, color_converted) = manage_color(icc.as_deref(), &mut image, &mut tiles);
 
     let (uw, uh) = if orientation.swaps_axes() {
         (h, w)
@@ -345,7 +366,34 @@ fn decode_jpeg(
         reduced,
         tiles,
         tiled_size,
+        profile,
+        color_converted,
     })
+}
+
+/// Converts the final pixels (after shrinking, so it is cheap) from an
+/// embedded profile to sRGB. Returns the profile name and whether
+/// anything was converted.
+fn manage_color(
+    icc: Option<&[u8]>,
+    image: &mut ColorImage,
+    tiles: &mut [Tile],
+) -> (Option<String>, bool) {
+    let Some(icc) = icc else {
+        return (None, false);
+    };
+    let profile = super::color::prepare(icc);
+    let name = profile.name().map(str::to_owned);
+    let Some(fix) = profile.fix() else {
+        return (name, false);
+    };
+    fix.apply(image);
+    for t in tiles {
+        if let Some(img) = Arc::get_mut(&mut t.image) {
+            fix.apply(img);
+        }
+    }
+    (name, true)
 }
 
 fn opaque_color_image(img: DynamicImage) -> ColorImage {
@@ -899,6 +947,32 @@ mod tests {
     }
 
     #[test]
+    fn embedded_display_p3_is_converted() {
+        let img =
+            DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([200, 60, 60])));
+        let mut png = Vec::new();
+        let mut enc = image::codecs::png::PngEncoder::new(&mut png);
+        use image::ImageEncoder;
+        enc.set_icc_profile(moxcms::ColorProfile::new_display_p3().encode().unwrap())
+            .unwrap();
+        enc.write_image(img.as_bytes(), 8, 8, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let d = decode_bytes(&png, Path::new("p3.png"), DecodeOpts::full(8192)).unwrap();
+        assert!(d.color_converted);
+        assert!(d.profile.is_some());
+        let p = d.frames[0].image.pixels[0];
+        assert!(p.r() > 205 && p.g() < 60, "{p:?}");
+        // Turned off: the numbers are shown as they are.
+        let off = DecodeOpts {
+            color: false,
+            ..DecodeOpts::full(8192)
+        };
+        let d = decode_bytes(&png, Path::new("p3.png"), off).unwrap();
+        assert!(!d.color_converted);
+        assert_eq!(d.frames[0].image.pixels[0], Color32::from_rgb(200, 60, 60));
+    }
+
+    #[test]
     fn rejects_garbage() {
         assert!(decode_bytes(b"hello", Path::new("x.txt"), DecodeOpts::full(8192)).is_err());
     }
@@ -982,9 +1056,12 @@ mod tests {
             ])
         });
         let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92)
-            .encode_image(&img)
-            .unwrap();
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92);
+        if std::env::var_os("MUUD_BENCH_P3").is_some() {
+            use image::ImageEncoder;
+            let _ = enc.set_icc_profile(moxcms::ColorProfile::new_display_p3().encode().unwrap());
+        }
+        enc.encode_image(&img).unwrap();
         out
     }
 

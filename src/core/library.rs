@@ -89,6 +89,16 @@ impl Library {
         self.loader.read_ahead(Vec::new());
     }
 
+    /// Forgets every decoded image and decodes again (after a setting that
+    /// changes the pixels).
+    pub fn reload(&mut self) {
+        self.cache.clear();
+        self.lru.clear();
+        self.full = None;
+        self.want_full = None;
+        self.request();
+    }
+
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
     }

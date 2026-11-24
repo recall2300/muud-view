@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
@@ -134,12 +134,14 @@ struct Shared {
     max_side: AtomicUsize,
     screen_w: AtomicUsize,
     screen_h: AtomicUsize,
+    color: AtomicBool,
 }
 
 impl Shared {
     fn opts(&self, quality: Quality) -> DecodeOpts {
         let max_side = self.max_side.load(Ordering::Relaxed);
-        match quality {
+        let color = self.color.load(Ordering::Relaxed);
+        let opts = match quality {
             // Full quality draws huge images in tiles instead of shrinking.
             Quality::Full => DecodeOpts::tiled(max_side),
             Quality::Screen => {
@@ -150,7 +152,8 @@ impl Shared {
                     ..DecodeOpts::full(max_side)
                 }
             }
-        }
+        };
+        DecodeOpts { color, ..opts }
     }
 }
 
@@ -177,6 +180,7 @@ impl Loader {
             max_side: AtomicUsize::new(8192),
             screen_w: AtomicUsize::new(0),
             screen_h: AtomicUsize::new(0),
+            color: AtomicBool::new(true),
         });
         let (tx, rx) = channel();
         let mut workers: Vec<_> = (0..threads.max(1))
@@ -221,6 +225,11 @@ impl Loader {
     pub fn set_screen_size(&self, size: [usize; 2]) {
         self.shared.screen_w.store(size[0], Ordering::Relaxed);
         self.shared.screen_h.store(size[1], Ordering::Relaxed);
+    }
+
+    /// Colour management on or off (takes effect for new decodes).
+    pub fn set_color_management(&self, on: bool) {
+        self.shared.color.store(on, Ordering::Relaxed);
     }
 
     /// Replaces the decode queue. `jobs` are in priority order; jobs already

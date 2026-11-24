@@ -583,6 +583,9 @@ impl eframe::App for MuudApp {
             // The real texture limit is only known once the renderer runs.
             let side = ctx.input(|i| i.max_texture_side).clamp(2048, 16384);
             self.lib.loader().set_max_texture_side(side);
+            self.lib
+                .loader()
+                .set_color_management(self.settings.color_manage);
             self.update_screen_size(&ctx);
             self.started = true;
             if let Some(p) = self.pending_open.take() {

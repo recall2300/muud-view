@@ -1,3 +1,4 @@
+pub mod color;
 pub mod decode;
 pub mod exif_info;
 pub mod folder;

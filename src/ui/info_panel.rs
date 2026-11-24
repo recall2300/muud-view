@@ -63,6 +63,23 @@ impl MuudApp {
                     mono(12.0),
                     ink(),
                 );
+                if let Some(name) = &d.profile {
+                    y += 20.0;
+                    let r = p.text(
+                        pos2(x0, y),
+                        Align2::LEFT_TOP,
+                        "ICC",
+                        grotesk_semi(13.0),
+                        ink(),
+                    );
+                    p.text(
+                        pos2(r.right() + 8.0, y + 1.0),
+                        Align2::LEFT_TOP,
+                        profile_label(name, d.color_converted),
+                        mono(12.0),
+                        ink(),
+                    );
+                }
                 y += 30.0;
 
                 y = self.box_resolution(&p, x0 - 4.0, x1 + 4.0, y, d);
@@ -416,9 +433,32 @@ fn box_location(
     yy - HAIR
 }
 
+/// "Display P3 → sRGB", shortened to fit the panel.
+fn profile_label(name: &str, converted: bool) -> String {
+    let mut short: String = name.chars().take(22).collect();
+    if name.chars().count() > 22 {
+        short.push('…');
+    }
+    if converted {
+        format!("{short} → sRGB")
+    } else {
+        short
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_labels() {
+        assert_eq!(profile_label("Display P3", true), "Display P3 → sRGB");
+        assert_eq!(
+            profile_label("sRGB IEC61966-2.1", false),
+            "sRGB IEC61966-2.1"
+        );
+        assert!(profile_label("A very long profile name from a camera", true).contains("…"));
+    }
 
     #[test]
     fn aspect_ratios() {

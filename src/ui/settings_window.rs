@@ -234,6 +234,10 @@ impl MuudApp {
         if s.smooth != before.smooth {
             self.textures.clear();
         }
+        if s.color_manage != before.color_manage {
+            self.lib.loader().set_color_management(s.color_manage);
+            self.lib.reload();
+        }
     }
 
     fn tab_general(&mut self, ui: &mut egui::Ui) {
@@ -297,6 +301,14 @@ impl MuudApp {
             (!self.settings.smooth) as usize,
         ) {
             self.settings.smooth = i == 0;
+        }
+        if let Some(i) = choice_row(
+            ui,
+            "COLOR PROFILE",
+            &[tr("ON"), tr("OFF")],
+            (!self.settings.color_manage) as usize,
+        ) {
+            self.settings.color_manage = i == 0;
         }
         if let Some(i) = choice_row(
             ui,
