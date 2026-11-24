@@ -6,6 +6,7 @@ pub mod compare;
 pub mod decode;
 pub mod exif_info;
 pub mod folder;
+pub mod formats;
 pub mod history;
 pub mod keymap;
 pub mod library;

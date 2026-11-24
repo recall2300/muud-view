@@ -212,6 +212,9 @@ pub fn decode_streaming(
     opts: DecodeOpts,
     partial: &mut dyn FnMut(Decoded),
 ) -> Result<Decoded, String> {
+    if let Some(kind) = super::formats::detect(bytes, path) {
+        return super::formats::decode(kind, bytes, path, opts, partial);
+    }
     let format = image::guess_format(bytes)
         .ok()
         .or_else(|| ImageFormat::from_path(path).ok())
@@ -525,7 +528,11 @@ fn gpu_target(size: [usize; 2], max_side: usize) -> Option<[usize; 2]> {
 /// The last step for a still image: tiles for a huge image at full quality,
 /// otherwise [`fit_for_display`]. Returns (image, tiles, reduced); with
 /// tiles, the image is a screen-size preview.
-fn finish(image: ColorImage, opts: DecodeOpts, o: Orientation) -> (ColorImage, Vec<Tile>, bool) {
+pub(super) fn finish(
+    image: ColorImage,
+    opts: DecodeOpts,
+    o: Orientation,
+) -> (ColorImage, Vec<Tile>, bool) {
     let [w, h] = image.size;
     if opts.tile && opts.fit.is_none() && (w > opts.max_side || h > opts.max_side) {
         // Absurdly large: shrink to the memory budget first.

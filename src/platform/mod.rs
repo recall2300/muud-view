@@ -18,6 +18,7 @@ pub fn pick_file(start: Option<&Path>) -> Option<PathBuf> {
             "Archives (zip, cbz)",
             crate::core::archive::ARCHIVE_EXTENSIONS,
         )
+        .add_filter("Camera RAW", crate::core::formats::RAW_EXTENSIONS)
         .add_filter("All files", &["*"]);
     if let Some(dir) = start {
         d = d.set_directory(dir);
