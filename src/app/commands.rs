@@ -27,6 +27,7 @@ impl MuudApp {
                 | Cmd::MoveToFolder(_)
                 | Cmd::Rename
                 | Cmd::ShareCopy
+                | Cmd::SaveRotation
         );
         if changes_file
             && self
@@ -220,6 +221,32 @@ impl MuudApp {
                         Err(e) => format!("COPY FAILED · {e}"),
                     }
                 });
+            }
+            Cmd::SaveRotation => {
+                let (Some(path), Some(d)) = (
+                    self.lib.current().cloned(),
+                    self.lib.current_decoded().cloned(),
+                ) else {
+                    return;
+                };
+                let (turns, fh, fv) = (self.view.turns, self.view.flip_h, self.view.flip_v);
+                if turns == 0 && !fh && !fv {
+                    self.notify("NOTHING TO SAVE");
+                } else if d.format != "JPEG" {
+                    self.notify("ONLY JPEG");
+                } else {
+                    match crate::core::rotate_save::save(&path, d.orientation, turns, fh, fv) {
+                        Ok(_) => {
+                            // The file now carries the rotation itself.
+                            self.view.turns = 0;
+                            self.view.flip_h = false;
+                            self.view.flip_v = false;
+                            self.lib.reload();
+                            self.notify("ROTATION SAVED");
+                        }
+                        Err(e) => self.notify(format!("SAVE FAILED · {e}")),
+                    }
+                }
             }
             Cmd::TwoPage | Cmd::Webtoon => {
                 use crate::core::reading::ReadingMode;

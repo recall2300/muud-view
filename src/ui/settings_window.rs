@@ -84,6 +84,7 @@ pub fn cmd_label(cmd: Cmd) -> String {
                 Cmd::PrevFolder => "이전 폴더·압축파일",
                 Cmd::TwoPage => "두 쪽 보기",
                 Cmd::Webtoon => "웹툰 보기",
+                Cmd::SaveRotation => "회전 저장 (무손실)",
                 Cmd::PinTop => "상단 바 고정",
                 Cmd::PinBottom => "하단 바 고정",
                 Cmd::RotateCw => "시계 방향 회전",
