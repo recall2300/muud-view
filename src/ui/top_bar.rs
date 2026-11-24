@@ -54,17 +54,17 @@ impl MuudApp {
         );
         let cy = rect.center().y;
 
-        let brand = p.layout_no_wrap("MUUD VIEW".into(), grotesk(14.0), INK);
+        let brand = p.layout_no_wrap("MUUD VIEW".into(), grotesk(14.0), ink());
         let brand_x = rect.right() - 16.0 - brand.size().x;
-        p.galley(pos2(brand_x, cy - brand.size().y / 2.0), brand, INK);
+        p.galley(pos2(brand_x, cy - brand.size().y / 2.0), brand, ink());
         let hint_text = if self.settings.pin_top {
             "F1 KEYS"
         } else {
             "F1 KEYS · ` PIN"
         };
-        let hint = p.layout_no_wrap(hint_text.into(), mono(11.0), MUTED);
+        let hint = p.layout_no_wrap(hint_text.into(), mono(11.0), muted());
         let hint_x = brand_x - 14.0 - hint.size().x;
-        p.galley(pos2(hint_x, cy - hint.size().y / 2.0), hint, MUTED);
+        p.galley(pos2(hint_x, cy - hint.size().y / 2.0), hint, muted());
         let right_limit = hint_x - 18.0;
 
         let mut x = rect.left() + 16.0;
@@ -74,7 +74,7 @@ impl MuudApp {
                 Align2::LEFT_CENTER,
                 "NO FILE",
                 mono(12.0),
-                MUTED,
+                muted(),
             );
             return;
         };
@@ -84,7 +84,7 @@ impl MuudApp {
             Align2::LEFT_CENTER,
             counter,
             mono_medium(12.0),
-            INK,
+            ink(),
         );
         x = r.right() + 14.0;
 
@@ -97,7 +97,7 @@ impl MuudApp {
             Align2::LEFT_CENTER,
             name,
             grotesk_semi(14.5),
-            INK,
+            ink(),
         );
         x = r.right() + 14.0;
         for t in pills {
@@ -105,7 +105,7 @@ impl MuudApp {
             if x + w > right_limit {
                 break;
             }
-            pill(p, pos2(x, cy), &t, INK);
+            pill(p, pos2(x, cy), &t, ink());
             x += w + 6.0;
         }
     }

@@ -1,7 +1,9 @@
 pub mod bottom_bar;
 pub mod canvas;
+pub mod i18n;
 pub mod info_panel;
 pub mod overlays;
+pub mod settings_window;
 pub mod setup;
 pub mod theme;
 pub mod top_bar;

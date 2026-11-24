@@ -27,7 +27,17 @@ pub struct Listing {
 
 /// Lists every image next to `target` (or inside it, if it is a folder),
 /// sorted naturally, and returns the index of `target` in that list.
+#[cfg(test)]
 pub fn list_for(target: &Path) -> std::io::Result<Listing> {
+    list_sorted(target, crate::core::settings::SortBy::Name, false)
+}
+
+/// Like [`list_for`], with a choice of order.
+pub fn list_sorted(
+    target: &Path,
+    sort: crate::core::settings::SortBy,
+    desc: bool,
+) -> std::io::Result<Listing> {
     let (dir, selected) = if target.is_dir() {
         (target.to_path_buf(), None)
     } else {
@@ -52,12 +62,25 @@ pub fn list_for(target: &Path) -> std::io::Result<Listing> {
         }
     }
 
-    files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b)));
+    sort_files(&mut files, sort, desc);
 
     let index = selected
         .and_then(|sel| files.iter().position(|f| same_file(f, &sel)))
         .unwrap_or(0);
     Ok(Listing { files, index })
+}
+
+pub fn sort_files(files: &mut [PathBuf], sort: crate::core::settings::SortBy, desc: bool) {
+    use crate::core::settings::SortBy;
+    let meta = |p: &Path| std::fs::metadata(p).ok();
+    match sort {
+        SortBy::Name => files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b))),
+        SortBy::Modified => files.sort_by_cached_key(|p| meta(p).and_then(|m| m.modified().ok())),
+        SortBy::Size => files.sort_by_cached_key(|p| meta(p).map(|m| m.len()).unwrap_or(0)),
+    }
+    if desc {
+        files.reverse();
+    }
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -187,6 +210,11 @@ mod tests {
         assert_eq!(l.index, 1);
         let l = list_for(&dir).unwrap();
         assert_eq!(l.index, 0);
+        std::fs::write(dir.join("p1.png"), vec![b'x'; 100]).unwrap();
+        let l = list_sorted(&dir, crate::core::settings::SortBy::Size, true).unwrap();
+        assert_eq!(file_name(&l.files[0]), "p1.png");
+        let l = list_sorted(&dir, crate::core::settings::SortBy::Name, true).unwrap();
+        assert_eq!(file_name(&l.files[0]), "p10.png");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

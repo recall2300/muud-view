@@ -53,6 +53,8 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 
 ## 단축키
 
+모든 키는 `F5` → 단축키 탭에서 바꿀 수 있고, `keymap.txt`로 내보내 팀원과 공유할 수 있습니다. 아래는 기본값입니다.
+
 | | |
 |---|---|
 | 다음 / 이전 | `PgDn` `→` `Space` 휠 / `PgUp` `←` `Backspace` |
@@ -71,7 +73,11 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 배경 (검정·종이·회색) | `B` |
 | 상단 / 하단 바 고정 | `` ` `` / `~` (해제하면 마우스를 가까이 가져갈 때만 표시) |
 | 열기 | `Ctrl+O` `F2` 파일, `F` 폴더 |
-| 설정 · Windows 통합 · 진단 | `F5` |
+| 설정 (일반·보기·마우스·단축키·보관함·Windows) | `F5` |
+| 최근·즐겨찾기 폴더 | `F3` `Ctrl+B` (`S` 즐겨찾기) |
+| 배율 고정 / 화면 표시 | `Ctrl+K` / `O` |
+| 무작위 | `Ctrl+Alt+PgDn` |
+| 이름 바꾸기 | `Shift+F2` |
 | 종료 | `Esc` `X` `Ctrl+W` |
 
 전체 목록은 [docs/SPEC.md](docs/SPEC.md), 계획은 [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/PLAN.md](docs/PLAN.md), 진행 기록은 [docs/PROGRESS.md](docs/PROGRESS.md)에 있습니다.

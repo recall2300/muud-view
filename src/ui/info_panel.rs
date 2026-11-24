@@ -34,9 +34,9 @@ impl MuudApp {
                 let mut y = top + 18.0;
 
                 // Header: name, pills, colour line.
-                let name = p.layout(folder::file_name(path), grotesk(21.0), INK, x1 - x0);
+                let name = p.layout(folder::file_name(path), grotesk(21.0), ink(), x1 - x0);
                 let h = name.size().y;
-                p.galley(pos2(x0, y), name, INK);
+                p.galley(pos2(x0, y), name, ink());
                 y += h + 12.0;
                 let mut x = x0;
                 let mp = d.width as f64 * d.height as f64 / 1e6;
@@ -45,7 +45,7 @@ impl MuudApp {
                     human_size(d.file_size),
                     format!("{} MP", trim1(mp)),
                 ] {
-                    x += pill(&p, pos2(x, y + 11.0), &t, INK) + 6.0;
+                    x += pill(&p, pos2(x, y + 11.0), &t, ink()) + 6.0;
                 }
                 y += 22.0 + 14.0;
                 let r = p.text(
@@ -53,7 +53,7 @@ impl MuudApp {
                     Align2::LEFT_TOP,
                     "Color",
                     grotesk_semi(13.0),
-                    INK,
+                    ink(),
                 );
                 let alpha = if d.has_alpha { "ALPHA" } else { "OPAQUE" };
                 p.text(
@@ -61,7 +61,7 @@ impl MuudApp {
                     Align2::LEFT_TOP,
                     format!("{} · {}", d.color, alpha),
                     mono(12.0),
-                    INK,
+                    ink(),
                 );
                 y += 30.0;
 
@@ -86,19 +86,19 @@ impl MuudApp {
         yy += 30.0;
         let cx = (bx0 + bx1) / 2.0;
         let mp = d.width as f64 * d.height as f64 / 1e6;
-        let big = p.layout_no_wrap(trim1(mp), grotesk(54.0), INK);
-        let unit = p.layout_no_wrap("MP".into(), mono(24.0), INK);
+        let big = p.layout_no_wrap(trim1(mp), grotesk(54.0), ink());
+        let unit = p.layout_no_wrap("MP".into(), mono(24.0), ink());
         let total = big.size().x + 6.0 + unit.size().x;
         let bx = cx - total / 2.0;
         let big_h = big.size().y;
-        p.galley(pos2(bx, yy), big.clone(), INK);
+        p.galley(pos2(bx, yy), big.clone(), ink());
         p.galley(
             pos2(bx + big.size().x + 6.0, yy + big_h - unit.size().y - 6.0),
             unit,
-            INK,
+            ink(),
         );
         yy += big_h + 8.0;
-        dotted_rule(p, pos2(bx0 + pad, yy), pos2(bx1 - pad, yy), INK);
+        dotted_rule(p, pos2(bx0 + pad, yy), pos2(bx1 - pad, yy), ink());
         yy += 14.0;
         let mut lines = vec![
             format!("{} × {} PX", d.width, d.height),
@@ -111,7 +111,7 @@ impl MuudApp {
         lines.push("↓".into());
         lines.push(format!("SHOWN AT {:.0}%", self.last_scale * 100.0));
         for l in lines {
-            let r = p.text(pos2(cx, yy), Align2::CENTER_TOP, l, mono(12.5), INK);
+            let r = p.text(pos2(cx, yy), Align2::CENTER_TOP, l, mono(12.5), ink());
             yy = r.bottom() + 6.0;
         }
         yy += pad - 6.0;
@@ -258,7 +258,7 @@ fn box_histogram(p: &egui::Painter, bx0: f32, bx1: f32, y: f32, hist: &[u32]) ->
         Align2::LEFT_TOP,
         "LUMINANCE - 256 BINS - SQRT",
         mono(11.5),
-        INK,
+        ink(),
     );
     yy += 26.0;
 
@@ -275,13 +275,13 @@ fn box_histogram(p: &egui::Painter, bx0: f32, bx1: f32, y: f32, hist: &[u32]) ->
 
     for (t, label) in [(1.0, "MAX"), (0.5, "25%")] {
         let gy = y_at(t);
-        dashed_rule(p, pos2(chart.left(), gy), pos2(chart.right(), gy), INK);
+        dashed_rule(p, pos2(chart.left(), gy), pos2(chart.right(), gy), ink());
         p.text(
             pos2(chart.left() + 2.0, gy - 2.0),
             Align2::LEFT_BOTTOM,
             label,
             mono(10.0),
-            INK,
+            ink(),
         );
     }
     // Lightly smoothed curve.
@@ -293,15 +293,15 @@ fn box_histogram(p: &egui::Painter, bx0: f32, bx1: f32, y: f32, hist: &[u32]) ->
             pos2(x_at(i), y_at((a + 2.0 * b + c) / 4.0))
         })
         .collect();
-    p.add(Shape::line(pts, Stroke::new(1.4, INK)));
+    p.add(Shape::line(pts, Stroke::new(1.4, ink())));
 
     let peak = (1..255).max_by_key(|&i| hist[i]).unwrap_or(128);
     let px = x_at(peak);
     let py = y_at(v(peak));
-    p.circle_filled(pos2(px, py), 3.2, INK);
+    p.circle_filled(pos2(px, py), 3.2, ink());
     p.line_segment(
         [pos2(px, py - 4.0), pos2(px, plot_top - 4.0)],
-        Stroke::new(1.0, INK),
+        Stroke::new(1.0, ink()),
     );
     let lbl = format!("{peak} PEAK");
     let align = if peak > 200 {
@@ -311,7 +311,7 @@ fn box_histogram(p: &egui::Painter, bx0: f32, bx1: f32, y: f32, hist: &[u32]) ->
     } else {
         Align2::CENTER_BOTTOM
     };
-    p.text(pos2(px, plot_top - 5.0), align, lbl, mono(10.5), INK);
+    p.text(pos2(px, plot_top - 5.0), align, lbl, mono(10.5), ink());
 
     // Axis.
     p.line_segment(
@@ -319,7 +319,7 @@ fn box_histogram(p: &egui::Painter, bx0: f32, bx1: f32, y: f32, hist: &[u32]) ->
             pos2(chart.left(), plot_bottom + 1.0),
             pos2(chart.right(), plot_bottom + 1.0),
         ],
-        Stroke::new(1.0, INK),
+        Stroke::new(1.0, ink()),
     );
     for (i, label, align) in [
         (0usize, "0", Align2::LEFT_TOP),
@@ -329,9 +329,9 @@ fn box_histogram(p: &egui::Painter, bx0: f32, bx1: f32, y: f32, hist: &[u32]) ->
         let x = x_at(i);
         p.line_segment(
             [pos2(x, plot_bottom + 1.0), pos2(x, plot_bottom + 5.0)],
-            Stroke::new(1.0, INK),
+            Stroke::new(1.0, ink()),
         );
-        p.text(pos2(x, plot_bottom + 5.0), align, label, mono(10.5), INK);
+        p.text(pos2(x, plot_bottom + 5.0), align, label, mono(10.5), ink());
     }
     yy = chart.bottom() + pad;
     p.rect_stroke(
@@ -359,7 +359,7 @@ fn box_location(
     // A small crosshair diagram, then coordinates beside a dotted divider.
     let d = Rect::from_min_size(pos2(bx0 + pad, yy), vec2(108.0, 96.0));
     let c = d.center();
-    let s = Stroke::new(1.0, INK);
+    let s = Stroke::new(1.0, ink());
     p.add(Shape::ellipse_stroke(c, vec2(40.0, 26.0), s));
     p.arrow(c, vec2(0.0, -46.0), s);
     p.arrow(c, vec2(0.0, 46.0), s);
@@ -377,7 +377,7 @@ fn box_location(
     let div = d.right() + 14.0;
     p.extend(Shape::dotted_line(
         &[pos2(div, d.top()), pos2(div, d.bottom())],
-        INK,
+        ink(),
         4.0,
         0.7,
     ));
@@ -390,7 +390,7 @@ fn box_location(
         Align2::LEFT_TOP,
         "GPS",
         grotesk_semi(13.0),
-        INK,
+        ink(),
     );
     ty = r.bottom() + 8.0;
     for line in [
@@ -399,7 +399,7 @@ fn box_location(
         alt.map(|a| format!("ALT {a}")).unwrap_or_default(),
     ] {
         if !line.is_empty() {
-            let r = p.text(pos2(tx, ty), Align2::LEFT_TOP, line, mono(12.0), INK);
+            let r = p.text(pos2(tx, ty), Align2::LEFT_TOP, line, mono(12.0), ink());
             ty = r.bottom() + 4.0;
         }
     }

@@ -9,7 +9,7 @@ use crate::app::MuudApp;
 use crate::core::decode::{shrink, upright};
 use crate::core::folder;
 use crate::core::history::{Action, Undone};
-use crate::core::keymap::{command_for, Cmd};
+use crate::core::keymap::Cmd;
 use crate::core::photo_folders;
 use crate::core::settings::Background;
 use crate::core::view::{step_zoom, ZoomMode};
@@ -242,6 +242,10 @@ impl MuudApp {
             Cmd::Undo => match self.history.undo() {
                 None => self.notify("NOTHING TO UNDO"),
                 Some(Ok(Undone::RemovedCopy)) => self.notify("UNDO · COPY REMOVED"),
+                Some(Ok(Undone::RenamedBack { current, restored })) => {
+                    self.lib.replace_path(&current, restored);
+                    self.notify("UNDO · FILE RESTORED");
+                }
                 Some(Ok(Undone::Returned { path, index })) => {
                     let same_folder = self
                         .lib
@@ -276,7 +280,43 @@ impl MuudApp {
                 }
             }
             Cmd::Help => self.show_help = !self.show_help,
-            Cmd::Setup => self.show_setup = !self.show_setup,
+            Cmd::Setup => {
+                self.show_settings = !self.show_settings;
+                self.capture = None;
+            }
+            Cmd::Folders => self.show_folders = !self.show_folders,
+            Cmd::RandomNext | Cmd::RandomPrev => {
+                if self.lib.len() > 1 {
+                    let i = self.random_index();
+                    self.go_to(i);
+                }
+            }
+            Cmd::LockZoom => {
+                self.zoom_locked = !self.zoom_locked;
+                self.notify(if self.zoom_locked {
+                    "ZOOM LOCKED"
+                } else {
+                    "ZOOM UNLOCKED"
+                });
+            }
+            Cmd::CycleOsd => {
+                use crate::core::settings::Osd;
+                self.settings.osd = match self.settings.osd {
+                    Osd::Off => Osd::Name,
+                    Osd::Name => Osd::Full,
+                    Osd::Full => Osd::Off,
+                };
+                self.notify(match self.settings.osd {
+                    Osd::Off => "ON-SCREEN INFO OFF",
+                    Osd::Name => "ON-SCREEN INFO NAME",
+                    Osd::Full => "ON-SCREEN INFO FULL",
+                });
+            }
+            Cmd::Rename => {
+                if let Some(p) = self.lib.current().filter(|p| p.exists()) {
+                    self.rename = Some(folder::file_name(p));
+                }
+            }
             Cmd::PinTop => {
                 self.settings.pin_top = !self.settings.pin_top;
                 self.notify(if self.settings.pin_top {
@@ -331,20 +371,62 @@ impl MuudApp {
                 }
                 continue;
             }
-            if self.show_setup {
-                use crate::ui::setup::ACTIONS;
+            if self.capture.is_some() {
+                self.capture_key(key, mods);
+                continue;
+            }
+            if self.rename.is_some() {
+                match key {
+                    egui::Key::Enter => self.finish_rename(),
+                    egui::Key::Escape => self.rename = None,
+                    _ => {}
+                }
+                continue;
+            }
+            if self.show_settings {
+                if matches!(key, egui::Key::Escape)
+                    || self.keymap.lookup(key, mods) == Some(Cmd::Setup)
+                {
+                    self.show_settings = false;
+                }
+                continue;
+            }
+            if self.show_folders {
+                let list = self.folder_list();
                 let n = match key {
                     egui::Key::Num1 => Some(0),
                     egui::Key::Num2 => Some(1),
                     egui::Key::Num3 => Some(2),
                     egui::Key::Num4 => Some(3),
                     egui::Key::Num5 => Some(4),
+                    egui::Key::Num6 => Some(5),
+                    egui::Key::Num7 => Some(6),
+                    egui::Key::Num8 => Some(7),
+                    egui::Key::Num9 => Some(8),
                     _ => None,
                 };
-                if let Some(i) = n {
-                    self.run_setup(ctx, ACTIONS[i].0);
-                } else if matches!(key, egui::Key::Escape | egui::Key::F5) {
-                    self.show_setup = false;
+                if let Some(f) = n.and_then(|i| list.get(i)) {
+                    let f = f.clone();
+                    self.show_folders = false;
+                    self.open(std::path::Path::new(&f));
+                } else if key == egui::Key::S {
+                    if let Some(dir) = self
+                        .lib
+                        .current()
+                        .and_then(|c| c.parent())
+                        .map(|d| d.display().to_string())
+                    {
+                        let starred = self.settings.toggle_favorite(&dir);
+                        self.notify(if starred {
+                            "FOLDER STARRED"
+                        } else {
+                            "FOLDER UNSTARRED"
+                        });
+                    }
+                } else if key == egui::Key::Escape
+                    || self.keymap.lookup(key, mods) == Some(Cmd::Folders)
+                {
+                    self.show_folders = false;
                 }
                 continue;
             }
@@ -355,7 +437,7 @@ impl MuudApp {
                     continue;
                 }
             }
-            if let Some(cmd) = command_for(key, mods) {
+            if let Some(cmd) = self.keymap.lookup(key, mods) {
                 self.run(ctx, cmd);
             }
         }
@@ -429,6 +511,37 @@ impl MuudApp {
             } else {
                 ctx.request_repaint_after(Duration::from_millis(50));
             }
+        }
+    }
+
+    /// Applies the rename sheet's text.
+    fn finish_rename(&mut self) {
+        let Some(new_name) = self.rename.take() else {
+            return;
+        };
+        let new_name = new_name.trim().to_string();
+        let Some(old) = self.lib.current().cloned() else {
+            return;
+        };
+        if new_name.is_empty() || new_name == folder::file_name(&old) {
+            return;
+        }
+        if new_name.contains(['\\', '/', ':', '*', '?', '"', '<', '>', '|']) {
+            self.notify("RENAME FAILED: \\ / : * ? \" < > |");
+            return;
+        }
+        let new = old.with_file_name(&new_name);
+        if new.exists() {
+            self.notify(format!("RENAME FAILED: {new_name} exists"));
+            return;
+        }
+        match std::fs::rename(&old, &new) {
+            Ok(()) => {
+                self.lib.replace_path(&old, new.clone());
+                self.history.push(Action::Renamed { from: old, to: new });
+                self.notify(format!("RENAMED · {new_name}"));
+            }
+            Err(e) => self.notify(format!("RENAME FAILED: {e}")),
         }
     }
 }

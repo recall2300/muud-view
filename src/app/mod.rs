@@ -15,10 +15,10 @@ use eframe::egui::{
 use crate::core::folder;
 use crate::core::library::Library;
 use crate::core::loader::Loader;
-use crate::core::settings::{Background, Settings};
+use crate::core::settings::{Background, Lang, Settings};
 use crate::core::view::{View, ZoomMode};
 use crate::ui::bottom_bar::{BarState, Edge};
-use crate::ui::theme::{apply_style, install_fonts, CANVAS_GRAY, CANVAS_INK, INK, PAPER};
+use crate::ui::theme::{apply_style, ink, install_fonts, paper, set_dark, CANVAS_GRAY, CANVAS_INK};
 
 pub const CACHE_BUDGET: usize = 1024 * 1024 * 1024;
 pub const TOP_BAR: f32 = 40.0;
@@ -59,7 +59,20 @@ pub struct MuudApp {
     /// Messages from background jobs (e.g. clipboard writes), shown as toasts.
     pub(crate) jobs: Vec<std::sync::mpsc::Receiver<String>>,
     pub(crate) paste_count: u32,
-    pub(crate) show_setup: bool,
+    pub(crate) show_settings: bool,
+    pub(crate) settings_tab: crate::ui::settings_window::Tab,
+    pub(crate) keymap: crate::core::keymap::Keymap,
+    /// Waiting for a key to assign to this command (Settings → Keys).
+    pub(crate) capture: Option<crate::core::keymap::Cmd>,
+    pub(crate) show_folders: bool,
+    /// Text being edited in the rename sheet.
+    pub(crate) rename: Option<String>,
+    pub(crate) zoom_locked: bool,
+    pub(crate) edge_accum: f32,
+    pointer_moved_at: Instant,
+    bar_visible_top: f32,
+    remembered: Option<PathBuf>,
+    rng: u64,
     incoming: Option<std::sync::mpsc::Receiver<Option<PathBuf>>>,
     title: String,
     started: bool,
@@ -77,18 +90,29 @@ impl MuudApp {
         if let Ok(mut slot) = ctx_slot.lock() {
             *slot = Some(cc.egui_ctx.clone());
         }
-        install_fonts(&cc.egui_ctx);
-        apply_style(&cc.egui_ctx);
         let mut settings: Settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
         let show = std::env::var("MUUD_SHOW").ok();
-        let show_setup = show.as_deref().is_some_and(|s| s.contains("setup"));
-        if let Some(show) = &show {
-            settings.show_info = show.contains("info");
-            settings.pin_bottom = show.contains("bottom");
+        let has = |w: &str| show.as_deref().is_some_and(|s| s.contains(w));
+        if show.is_some() {
+            settings.show_info = has("info");
+            settings.pin_bottom = has("bottom");
+            settings.dark = has("dark");
+            settings.lang = if has("en") { Lang::En } else { Lang::Ko };
         }
+        let show_settings = has("settings");
+        let settings_tab = if has("keys") {
+            crate::ui::settings_window::Tab::Keys
+        } else {
+            Default::default()
+        };
+        crate::ui::i18n::set_korean(settings.lang == Lang::Ko);
+        set_dark(settings.dark);
+        install_fonts(&cc.egui_ctx);
+        apply_style(&cc.egui_ctx);
+        let keymap = crate::core::keymap::Keymap::with_overrides(&settings.key_overrides);
         let threads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4)
@@ -122,7 +146,22 @@ impl MuudApp {
             history: Default::default(),
             jobs: Vec::new(),
             paste_count: 0,
-            show_setup,
+            show_settings,
+            settings_tab,
+            keymap,
+            capture: None,
+            show_folders: has("folders"),
+            rename: None,
+            zoom_locked: false,
+            edge_accum: 0.0,
+            pointer_moved_at: Instant::now(),
+            bar_visible_top: 0.0,
+            remembered: None,
+            rng: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(1)
+                | 1,
             incoming,
             title: String::new(),
             started: false,
@@ -135,11 +174,26 @@ impl MuudApp {
     // Files
 
     pub(crate) fn open(&mut self, path: &Path) {
-        match folder::list_for(path) {
+        match folder::list_sorted(path, self.settings.sort, self.settings.sort_desc) {
             Ok(l) if !l.files.is_empty() => {
-                self.last_dir = l.files[l.index].parent().map(Path::to_path_buf);
+                let folder_path = l.files[l.index].parent().map(Path::to_path_buf);
+                let folder_key = folder_path
+                    .as_ref()
+                    .map(|f| f.display().to_string())
+                    .unwrap_or_default();
+                let mut index = l.index;
+                // Opening a folder (not a specific file) resumes where we were.
+                if path.is_dir() && self.settings.resume {
+                    if let Some(name) = self.settings.position_in(&folder_key) {
+                        if let Some(i) = l.files.iter().position(|f| folder::file_name(f) == name) {
+                            index = i;
+                        }
+                    }
+                }
+                self.settings.add_recent(&folder_key);
+                self.last_dir = folder_path;
                 self.open_error = None;
-                self.lib.set_files(l.files, l.index);
+                self.lib.set_files(l.files, index);
                 self.reset_view();
             }
             Ok(_) => self.notify("NO IMAGES IN THIS FOLDER"),
@@ -158,6 +212,14 @@ impl MuudApp {
     }
 
     pub(crate) fn reset_view(&mut self) {
+        self.frame_index = 0;
+        self.next_frame_at = None;
+        self.wheel_accum = 0.0;
+        self.edge_accum = 0.0;
+        if self.zoom_locked {
+            // Ctrl+K: keep the same zoom and position for the next image.
+            return;
+        }
         let mode = match self.view.mode {
             ZoomMode::Free(_) => ZoomMode::Fit,
             m => m,
@@ -197,6 +259,20 @@ impl MuudApp {
         }
         self.reset_view();
         Some(removed)
+    }
+
+    /// A pseudo-random index other than the current one.
+    pub(crate) fn random_index(&mut self) -> usize {
+        let n = self.lib.len().max(1);
+        // xorshift64
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        let mut i = (self.rng % n as u64) as usize;
+        if n > 1 && i == self.lib.index {
+            i = (i + 1) % n;
+        }
+        i
     }
 
     /// Runs `job` on a thread; its returned message becomes a toast.
@@ -244,6 +320,24 @@ impl MuudApp {
         self.lib.set_files(vec![label], 0);
         self.open_error = None;
         self.reset_view();
+    }
+
+    /// Runs a configurable mouse action.
+    pub(crate) fn mouse_action(
+        &mut self,
+        ctx: &egui::Context,
+        a: crate::core::settings::MouseAction,
+    ) {
+        use crate::core::keymap::Cmd;
+        use crate::core::settings::MouseAction as M;
+        let cmd = match a {
+            M::None => return,
+            M::Fullscreen => Cmd::Fullscreen,
+            M::Maximize => Cmd::Maximize,
+            M::Original => Cmd::Original,
+            M::FitWindow => Cmd::FitWindow,
+        };
+        self.run(ctx, cmd);
     }
 
     pub(crate) fn notify(&mut self, text: impl Into<String>) {
@@ -330,6 +424,21 @@ impl MuudApp {
     // -----------------------------------------------------------------------
     // Misc
 
+    fn remember_position(&mut self) {
+        let Some(cur) = self.lib.current() else {
+            return;
+        };
+        if self.remembered.as_ref() == Some(cur) || !cur.exists() {
+            return;
+        }
+        let cur = cur.clone();
+        if let Some(folder) = cur.parent() {
+            self.settings
+                .remember_position(&folder.display().to_string(), &folder::file_name(&cur));
+        }
+        self.remembered = Some(cur);
+    }
+
     fn update_title(&mut self, ctx: &egui::Context) {
         let title = match self.lib.current() {
             Some(p) => format!("{} — muud view", folder::file_name(p)),
@@ -351,8 +460,8 @@ impl MuudApp {
 
     pub(crate) fn on_canvas_color(&self) -> Color32 {
         match self.settings.background {
-            Background::Paper => INK,
-            _ => PAPER,
+            Background::Paper => ink(),
+            _ => paper(),
         }
     }
 
@@ -405,6 +514,7 @@ impl eframe::App for MuudApp {
         self.tick(&ctx);
         self.ensure_textures(&ctx);
         self.update_title(&ctx);
+        self.remember_position();
 
         let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
         let empty = self.lib.is_empty();
@@ -416,7 +526,7 @@ impl eframe::App for MuudApp {
                 .exact_size(TOP_BAR)
                 .resizable(false)
                 .show_separator_line(false)
-                .frame(egui::Frame::new().fill(PAPER))
+                .frame(egui::Frame::new().fill(paper()))
                 .show(ui, |ui| {
                     let r = ui.max_rect();
                     self.top_bar(ui, r)
@@ -427,7 +537,7 @@ impl eframe::App for MuudApp {
                 .exact_size(BOTTOM_BAR)
                 .resizable(false)
                 .show_separator_line(false)
-                .frame(egui::Frame::new().fill(PAPER))
+                .frame(egui::Frame::new().fill(paper()))
                 .show(ui, |ui| {
                     let r = ui.max_rect();
                     self.bottom_bar(ui, r)
@@ -438,7 +548,7 @@ impl eframe::App for MuudApp {
                 .exact_size(INFO_W)
                 .resizable(false)
                 .show_separator_line(false)
-                .frame(egui::Frame::new().fill(PAPER))
+                .frame(egui::Frame::new().fill(paper()))
                 .show(ui, |ui| self.info_panel(ui));
         }
         let bg = self.canvas_color();
@@ -446,8 +556,10 @@ impl eframe::App for MuudApp {
             .frame(egui::Frame::new().fill(bg))
             .show(ui, |ui| self.canvas(ui));
 
+        self.bar_visible_top = 0.0;
         if !pin_top {
             let a = self.bar_opacity(&ctx, Edge::Top);
+            self.bar_visible_top = a;
             if a > 0.01 {
                 self.floating_bar(&ctx, Edge::Top, a);
             }
@@ -465,9 +577,31 @@ impl eframe::App for MuudApp {
             }
         }
 
+        // File name over the image when the top bar is out of the way.
+        let top_hidden = fullscreen || (!pin_top && self.bar_visible_top < 0.01);
+        if top_hidden && !empty {
+            let p = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Middle,
+                egui::Id::unique("osd"),
+            ));
+            self.osd(&p, self.last_canvas);
+        }
+        // Hide the cursor in fullscreen after a moment without movement.
+        if ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_down()) {
+            self.pointer_moved_at = Instant::now();
+        }
+        if fullscreen && self.settings.cursor_autohide && !self.show_settings {
+            let idle = self.pointer_moved_at.elapsed();
+            if idle > Duration::from_millis(1500) {
+                ctx.set_cursor_icon(egui::CursorIcon::None);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(1600) - idle);
+            }
+        }
+
         self.overlays(&ctx);
-        if self.show_setup {
-            self.setup_sheet(&ctx);
+        if self.show_settings {
+            self.settings_window(&ctx);
         }
         self.screenshot(&ctx);
     }

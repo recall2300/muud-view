@@ -95,7 +95,7 @@ impl MuudApp {
             .show(ctx, |ui| {
                 ui.multiply_opacity(opacity);
                 let (rect, _) = ui.allocate_exact_size(vec2(screen.width(), h), Sense::click());
-                ui.painter().rect_filled(rect, CornerRadius::ZERO, PAPER);
+                ui.painter().rect_filled(rect, CornerRadius::ZERO, paper());
                 match edge {
                     Edge::Top => self.top_bar(ui, rect),
                     Edge::Bottom => self.bottom_bar(ui, rect),
@@ -194,7 +194,7 @@ impl MuudApp {
             Align2::LEFT_CENTER,
             counter,
             mono_medium(12.0),
-            INK,
+            ink(),
         );
         let track = Rect::from_min_max(
             pos2(r.right() + 16.0, cy - 10.0),
@@ -219,15 +219,18 @@ impl MuudApp {
         let y = track.center().y;
         let t = track_fraction(self.lib.index, len);
         let cur_x = track.left() + track.width() * t;
-        dotted_rule(p, pos2(track.left(), y), pos2(track.right(), y), INK);
+        dotted_rule(p, pos2(track.left(), y), pos2(track.right(), y), ink());
         p.line_segment(
             [pos2(track.left(), y), pos2(cur_x, y)],
-            Stroke::new(1.6, INK),
+            Stroke::new(1.6, ink()),
         );
         for x in [track.left(), track.right()] {
-            p.line_segment([pos2(x, y - 4.0), pos2(x, y + 4.0)], Stroke::new(1.0, INK));
+            p.line_segment(
+                [pos2(x, y - 4.0), pos2(x, y + 4.0)],
+                Stroke::new(1.0, ink()),
+            );
         }
-        p.circle_filled(pos2(cur_x, y), 4.0, INK);
+        p.circle_filled(pos2(cur_x, y), 4.0, ink());
 
         if let Some(hover) = resp.hover_pos() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -235,20 +238,20 @@ impl MuudApp {
             let hx = track.left() + track.width() * track_fraction(i, len);
             p.line_segment(
                 [pos2(hx, y - 6.0), pos2(hx, y + 6.0)],
-                Stroke::new(1.0, INK),
+                Stroke::new(1.0, ink()),
             );
             let label = format!("{:03}  {}", i + 1, folder::file_name(&self.lib.files[i]));
             let label = ellipsize(p, &label, mono(11.0), 360.0);
-            let galley = p.layout_no_wrap(label, mono(11.0), INK);
+            let galley = p.layout_no_wrap(label, mono(11.0), ink());
             let size = galley.size() + vec2(16.0, 8.0);
             let x = (hx - size.x / 2.0).clamp(track.left() - 40.0, track.right() + 40.0 - size.x);
             let tip = Rect::from_min_size(pos2(x, track.top() - size.y - 10.0), size);
             let fg = ui
                 .ctx()
                 .layer_painter(egui::LayerId::new(Order::Tooltip, Id::unique("seek-tip")));
-            fg.rect_filled(tip, CornerRadius::same(255), PAPER);
+            fg.rect_filled(tip, CornerRadius::same(255), paper());
             fg.rect_stroke(tip, CornerRadius::same(255), hair(), StrokeKind::Inside);
-            fg.galley(tip.min + vec2(8.0, 4.0), galley, INK);
+            fg.galley(tip.min + vec2(8.0, 4.0), galley, ink());
         }
         let pressed = resp.clicked() || resp.dragged();
         let pos = resp.interact_pointer_pos()?;
@@ -264,16 +267,16 @@ fn pill_button(ui: &mut egui::Ui, left_center: Pos2, label: &str, active: bool) 
     let resp = ui.interact(rect, Id::unique(("bar-button", label)), Sense::click());
     let inverted = active || resp.hovered();
     let (fill, fg) = if inverted {
-        (INK, PAPER)
+        (ink(), paper())
     } else {
-        (Color32::TRANSPARENT, INK)
+        (Color32::TRANSPARENT, ink())
     };
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::same(255), fill);
     p.rect_stroke(
         rect,
         CornerRadius::same(255),
-        Stroke::new(1.0, INK),
+        Stroke::new(1.0, ink()),
         StrokeKind::Inside,
     );
     p.text(rect.center(), Align2::CENTER_CENTER, label, mono(11.5), fg);

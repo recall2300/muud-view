@@ -8,16 +8,54 @@ use eframe::egui::{
     Shape, Stroke, StrokeKind, Vec2,
 };
 
-pub const PAPER: Color32 = Color32::from_rgb(0xF4, 0xF3, 0xEF);
-pub const INK: Color32 = Color32::from_rgb(0x0D, 0x0D, 0x0D);
-pub const MUTED: Color32 = Color32::from_rgb(0x6E, 0x6D, 0x68);
+const LIGHT_PAPER: Color32 = Color32::from_rgb(0xF4, 0xF3, 0xEF);
+const LIGHT_INK: Color32 = Color32::from_rgb(0x0D, 0x0D, 0x0D);
+const DARK_PAPER: Color32 = Color32::from_rgb(0x16, 0x16, 0x15);
+const DARK_INK: Color32 = Color32::from_rgb(0xEC, 0xEB, 0xE6);
+
+static DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Switches the bars, panels and sheets between light (paper) and dark.
+pub fn set_dark(dark: bool) {
+    DARK.store(dark, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn is_dark() -> bool {
+    DARK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Background of bars, panels and sheets.
+pub fn paper() -> Color32 {
+    if is_dark() {
+        DARK_PAPER
+    } else {
+        LIGHT_PAPER
+    }
+}
+
+/// Text and lines on [`paper`].
+pub fn ink() -> Color32 {
+    if is_dark() {
+        DARK_INK
+    } else {
+        LIGHT_INK
+    }
+}
+
+pub fn muted() -> Color32 {
+    if is_dark() {
+        Color32::from_rgb(0x8C, 0x8B, 0x86)
+    } else {
+        Color32::from_rgb(0x6E, 0x6D, 0x68)
+    }
+}
 pub const CANVAS_INK: Color32 = Color32::from_rgb(0x12, 0x12, 0x12);
 pub const CANVAS_GRAY: Color32 = Color32::from_rgb(0x5A, 0x5A, 0x57);
 
 pub const HAIR: f32 = 1.0;
 
 pub fn hair() -> Stroke {
-    Stroke::new(HAIR, INK)
+    Stroke::new(HAIR, ink())
 }
 
 const GROTESK: &str = "grotesk";
@@ -155,16 +193,20 @@ fn load_hangul_fonts() -> (Option<FontData>, Option<FontData>) {
 }
 
 pub fn apply_style(ctx: &egui::Context) {
-    ctx.set_theme(egui::Theme::Light);
+    ctx.set_theme(if is_dark() {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
     ctx.global_style_mut(|style| {
-        style.visuals.panel_fill = PAPER;
-        style.visuals.window_fill = PAPER;
-        style.visuals.extreme_bg_color = PAPER;
-        style.visuals.override_text_color = Some(INK);
+        style.visuals.panel_fill = paper();
+        style.visuals.window_fill = paper();
+        style.visuals.extreme_bg_color = paper();
+        style.visuals.override_text_color = Some(ink());
         style.visuals.window_stroke = hair();
         style.visuals.window_corner_radius = CornerRadius::ZERO;
-        style.visuals.selection.bg_fill = INK;
-        style.visuals.selection.stroke = Stroke::new(1.0, PAPER);
+        style.visuals.selection.bg_fill = ink();
+        style.visuals.selection.stroke = Stroke::new(1.0, paper());
         style.spacing.scroll.bar_width = 4.0;
         style.spacing.scroll.floating = true;
         style.interaction.selectable_labels = false;
@@ -194,7 +236,7 @@ pub fn pill(painter: &egui::Painter, left_center: Pos2, text: &str, color: Color
 /// Width a pill would take.
 pub fn pill_width(painter: &egui::Painter, text: &str) -> f32 {
     painter
-        .layout_no_wrap(text.to_owned(), mono(11.5), INK)
+        .layout_no_wrap(text.to_owned(), mono(11.5), ink())
         .size()
         .x
         + 20.0
@@ -215,7 +257,7 @@ pub fn dashed_rule(painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32) {
 
 /// Section title in bold grotesk, e.g. "BATTERY LIFE".
 pub fn section_title(painter: &egui::Painter, pos: Pos2, text: &str) -> f32 {
-    let r = painter.text(pos, Align2::LEFT_TOP, text, grotesk(15.0), INK);
+    let r = painter.text(pos, Align2::LEFT_TOP, text, grotesk(15.0), ink());
     r.height()
 }
 
@@ -226,7 +268,7 @@ pub fn sub_label(painter: &egui::Painter, pos: Pos2, text: &str) -> f32 {
         Align2::LEFT_TOP,
         format!("{text} ↓"),
         grotesk_semi(11.5),
-        INK,
+        ink(),
     );
     r.height()
 }
@@ -241,10 +283,10 @@ pub fn kv_row(
     value: &str,
     max_w: f32,
 ) -> f32 {
-    painter.text(Pos2::new(left, y), Align2::LEFT_TOP, key, mono(12.5), INK);
-    let galley = painter.layout(value.to_owned(), mono(12.5), INK, max_w.max(40.0));
+    painter.text(Pos2::new(left, y), Align2::LEFT_TOP, key, mono(12.5), ink());
+    let galley = painter.layout(value.to_owned(), mono(12.5), ink(), max_w.max(40.0));
     let h = galley.size().y.max(17.0);
-    painter.galley(Pos2::new(value_x, y), galley, INK);
+    painter.galley(Pos2::new(value_x, y), galley, ink());
     h + 3.0
 }
 
@@ -252,7 +294,7 @@ pub fn kv_row(
 pub fn ellipsize(painter: &egui::Painter, text: &str, font: FontId, max_width: f32) -> String {
     let width = |s: &str| {
         painter
-            .layout_no_wrap(s.to_owned(), font.clone(), INK)
+            .layout_no_wrap(s.to_owned(), font.clone(), ink())
             .size()
             .x
     };

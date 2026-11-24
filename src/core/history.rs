@@ -15,6 +15,8 @@ pub enum Action {
         to: PathBuf,
         index: usize,
     },
+    /// `from` was renamed to `to`; undo renames it back.
+    Renamed { from: PathBuf, to: PathBuf },
     /// `path` went to the Recycle Bin; undo restores it.
     Trashed { path: PathBuf, index: usize },
 }
@@ -28,7 +30,15 @@ pub struct History {
 #[derive(Debug, PartialEq)]
 pub enum Undone {
     RemovedCopy,
-    Returned { path: PathBuf, index: usize },
+    Returned {
+        path: PathBuf,
+        index: usize,
+    },
+    /// The file now called `current` is back to `restored`.
+    RenamedBack {
+        current: PathBuf,
+        restored: PathBuf,
+    },
 }
 
 impl History {
@@ -64,6 +74,16 @@ fn revert(a: &Action) -> Result<Undone, String> {
             Ok(Undone::Returned {
                 path: from.clone(),
                 index: *index,
+            })
+        }
+        Action::Renamed { from, to } => {
+            if from.exists() {
+                return Err("a file with the original name already exists".into());
+            }
+            std::fs::rename(to, from).map_err(|e| e.to_string())?;
+            Ok(Undone::RenamedBack {
+                current: to.clone(),
+                restored: from.clone(),
             })
         }
         Action::Trashed { path, index } => {

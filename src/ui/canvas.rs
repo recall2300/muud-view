@@ -42,7 +42,13 @@ impl MuudApp {
                 .as_ref()
                 .map(|c| folder::file_name(c))
                 .unwrap_or_default();
-            crate::ui::overlays::message_card(&p, rect.center(), "CANNOT OPEN", &name, err);
+            crate::ui::overlays::message_card(
+                &p,
+                rect.center(),
+                crate::ui::i18n::tr("CANNOT OPEN"),
+                &name,
+                err,
+            );
             self.wheel_navigation(&ctx, &resp);
             return;
         }
@@ -55,7 +61,7 @@ impl MuudApp {
             p.text(
                 rect.center(),
                 Align2::CENTER_CENTER,
-                "DECODING …",
+                crate::ui::i18n::tr("DECODING …"),
                 mono(12.0),
                 self.on_canvas_color(),
             );
@@ -113,8 +119,10 @@ impl MuudApp {
             Vec::new()
         };
         let overflow_y = shown.y > rect.height() + 0.5;
+        let zoom_wheel = self.settings.wheel == crate::core::settings::WheelMode::Zoom;
+        let max_offset = ((shown.y - rect.height()) / 2.0).max(0.0);
         for (notches, ctrl) in wheel {
-            if ctrl {
+            if ctrl != zoom_wheel {
                 let new = (scale * 1.15f32.powf(notches))
                     .clamp(crate::core::view::MIN_SCALE, crate::core::view::MAX_SCALE);
                 let anchor = pointer.unwrap_or(rect.center());
@@ -123,7 +131,22 @@ impl MuudApp {
                 scale = new;
                 shown = img * scale / ppp;
             } else if overflow_y {
-                self.view.offset.y += notches * 90.0;
+                // At the bottom (or top) edge, keep scrolling to move on.
+                let at_bottom = self.view.offset.y <= -max_offset + 0.5 && notches < 0.0;
+                let at_top = self.view.offset.y >= max_offset - 0.5 && notches > 0.0;
+                if self.settings.wheel_edge_next && (at_bottom || at_top) {
+                    self.edge_accum -= notches;
+                    if self.edge_accum >= 2.0 {
+                        self.edge_accum = 0.0;
+                        self.run(&ctx, Cmd::Next);
+                    } else if self.edge_accum <= -2.0 {
+                        self.edge_accum = 0.0;
+                        self.run(&ctx, Cmd::Prev);
+                    }
+                } else {
+                    self.edge_accum = 0.0;
+                    self.view.offset.y += notches * 90.0;
+                }
             } else {
                 self.wheel_accum -= notches;
                 while self.wheel_accum >= 1.0 {
@@ -141,13 +164,21 @@ impl MuudApp {
             self.view.offset += resp.drag_delta();
         }
         if resp.double_clicked() {
-            self.run(&ctx, Cmd::Maximize);
+            self.mouse_action(&ctx, self.settings.double_click);
         }
         if resp.clicked_by(PointerButton::Middle) {
             if ctx.input(|i| i.modifiers.ctrl) {
                 self.run(&ctx, Cmd::Original);
             } else {
-                self.run(&ctx, Cmd::Fullscreen);
+                self.mouse_action(&ctx, self.settings.middle_click);
+            }
+        }
+        if self.settings.side_buttons {
+            if resp.clicked_by(PointerButton::Extra1) {
+                self.run(&ctx, Cmd::Prev);
+            }
+            if resp.clicked_by(PointerButton::Extra2) {
+                self.run(&ctx, Cmd::Next);
             }
         }
 
@@ -235,7 +266,7 @@ impl MuudApp {
         let w = 440.0f32.min(rect.width() - 32.0);
         let h = 372.0;
         let card = Rect::from_center_size(rect.center(), vec2(w, h));
-        p.rect_filled(card, CornerRadius::ZERO, PAPER);
+        p.rect_filled(card, CornerRadius::ZERO, paper());
         p.rect_stroke(card, CornerRadius::ZERO, hair(), StrokeKind::Inside);
         let x0 = card.left() + 24.0;
         let x1 = card.right() - 24.0;
@@ -245,7 +276,7 @@ impl MuudApp {
             Align2::LEFT_TOP,
             "MUUD VIEW",
             grotesk(40.0),
-            INK,
+            ink(),
         );
         y = r.bottom() + 12.0;
         let mut x = x0;
@@ -255,7 +286,7 @@ impl MuudApp {
             "OFFLINE".into(),
             "RUST".into(),
         ] {
-            x += pill(p, pos2(x, y + 11.0), &t, INK) + 6.0;
+            x += pill(p, pos2(x, y + 11.0), &t, ink()) + 6.0;
         }
         y += 22.0 + 22.0;
 
@@ -272,25 +303,32 @@ impl MuudApp {
         p.text(
             pos2(cx, yy),
             Align2::CENTER_TOP,
-            "DROP AN IMAGE",
+            crate::ui::i18n::tr("DROP AN IMAGE"),
             grotesk(26.0),
-            INK,
+            ink(),
         );
         yy += 42.0;
-        dotted_rule(p, pos2(bx, yy), pos2(boxr.right() - 16.0, yy), INK);
+        dotted_rule(p, pos2(bx, yy), pos2(boxr.right() - 16.0, yy), ink());
         yy += 16.0;
-        let lines: &[&str] = if platform::dialogs_available() {
-            &[
-                "CTRL+O  OPEN FILE",
-                "F  OPEN FOLDER",
-                "↓",
-                "F1  ALL SHORTCUTS",
+        use crate::core::keymap::Cmd as C;
+        use crate::ui::i18n::tr;
+        let k = |c: C| self.keymap.short_keys(&[c]);
+        let lines: Vec<String> = if platform::dialogs_available() {
+            vec![
+                format!("{}  {}", k(C::OpenFile), tr("OPEN FILE")),
+                format!("{}  {}", k(C::OpenFolder), tr("OPEN FOLDER")),
+                "↓".into(),
+                format!("{}  {}", k(C::Help), tr("ALL SHORTCUTS")),
             ]
         } else {
-            &["OR START WITH  muud-view <FILE>", "↓", "F1  ALL SHORTCUTS"]
+            vec![
+                "muud-view <FILE>".into(),
+                "↓".into(),
+                format!("{}  {}", k(C::Help), tr("ALL SHORTCUTS")),
+            ]
         };
         for line in lines {
-            let r = p.text(pos2(cx, yy), Align2::CENTER_TOP, *line, mono(12.5), INK);
+            let r = p.text(pos2(cx, yy), Align2::CENTER_TOP, line, mono(12.5), ink());
             yy = r.bottom() + 8.0;
         }
         let _ = x1;

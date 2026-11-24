@@ -219,6 +219,21 @@ impl Library {
         self.request();
     }
 
+    /// Updates a file's path after it was renamed, keeping its decoded image.
+    pub fn replace_path(&mut self, old: &Path, new: PathBuf) {
+        if let Some(i) = self.files.iter().position(|p| p == old) {
+            self.files[i] = new.clone();
+        }
+        if let Some(slot) = self.cache.remove(old) {
+            self.cache.insert(new.clone(), slot);
+        }
+        for p in self.lru.iter_mut() {
+            if p == old {
+                *p = new.clone();
+            }
+        }
+    }
+
     /// Adds a decoded image that did not come from the loader (e.g. pasted).
     pub fn insert_decoded(&mut self, path: PathBuf, decoded: Arc<Decoded>) {
         self.insert(path, Slot::Ready(decoded));
@@ -319,6 +334,17 @@ mod tests {
         lib.restore(p.clone(), at);
         assert_eq!(lib.current(), Some(&p));
         assert_eq!(lib.len(), 3);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rename_keeps_position() {
+        let (mut lib, dir) = lib_with(3);
+        lib.go_to(1);
+        let old = lib.files[1].clone();
+        let new = dir.join("renamed.png");
+        lib.replace_path(&old, new.clone());
+        assert_eq!(lib.current(), Some(&new));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
