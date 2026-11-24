@@ -1,10 +1,16 @@
 name: Release
 
-# Two ways to publish a release:
-#   1. GitHub → Actions → Release → "Run workflow", enter a version like v0.1.0
-#   2. git tag v0.1.0 && git push origin v0.1.0
+# Releases happen by themselves: when a commit on main carries a version in
+# Cargo.toml that has no tag yet (e.g. 0.5.0 and no v0.5.0), this workflow
+# tests, builds and publishes it, creating the tag. Bump the version only
+# when it is ready to ship.
+#
+# By hand, if ever needed:
+#   - GitHub → Actions → Release → "Run workflow", enter a version like v0.1.0
+#   - git tag v0.1.0 && git push origin v0.1.0
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -17,11 +23,47 @@ permissions:
   id-token: write
   attestations: write
 
+# Never two releases at once.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # Decides whether this run publishes anything, and which version.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          INPUT: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            v="$INPUT"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            v="$GITHUB_REF_NAME"
+          else
+            v="v$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')"
+          fi
+          release=true
+          if [ "$GITHUB_REF_TYPE" = "branch" ] && [ "$GITHUB_EVENT_NAME" = "push" ] \
+             && git ls-remote --exit-code --tags origin "refs/tags/$v" >/dev/null; then
+            release=false
+            echo "$v is already released; nothing to do."
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "Version $v, release: $release"
+
   windows:
+    needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: windows-latest
     env:
-      VERSION: ${{ inputs.version || github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Check version
         shell: pwsh
