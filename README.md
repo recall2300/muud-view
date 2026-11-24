@@ -73,6 +73,7 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 | 공유용으로 저장 (작게 + GPS·EXIF 제거, 바로 붙여 넣기) | `Ctrl+S` |
 | 보이는 영역만 복사 | `Alt+C` |
 | 썸네일 보기 | `G` |
+| 다음 / 이전 폴더·압축파일 | `]` / `[` |
 | 별표 / 별표만 보기 | `S` / `Shift+S` |
 | 파일을 창 밖으로 끌기 (메일·메신저) | 맞춤 보기에서 드래그, 또는 `Ctrl`+드래그 |
 | 복사: 이미지+파일 / 작게 / EXIF / 경로 | `Ctrl+C` / `Ctrl+Alt+C` / `Ctrl+Shift+C` / `Ctrl+Alt+Shift+C` |
