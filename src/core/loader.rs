@@ -29,6 +29,9 @@ pub type LoadResult = Result<Arc<Decoded>, String>;
 
 /// Raw file bytes kept in memory ahead of decoding.
 pub const READ_BUDGET: usize = 512 * 1024 * 1024;
+/// Files read at the same time. On a NAS most of a read is waiting for the
+/// network, so two in flight nearly double the read-ahead speed.
+pub const READERS: usize = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Quality {
@@ -116,11 +119,17 @@ impl ByteCache {
 
     /// The first file in `order` that is not cached yet, unless the cache is
     /// already full.
-    pub fn next_to_read<'a>(&self, order: &'a [PathBuf]) -> Option<&'a PathBuf> {
+    pub fn next_to_read<'a>(
+        &self,
+        order: &'a [PathBuf],
+        busy: &HashSet<PathBuf>,
+    ) -> Option<&'a PathBuf> {
         if self.total() >= self.budget {
             return None;
         }
-        order.iter().find(|p| !self.map.contains_key(*p))
+        order
+            .iter()
+            .find(|p| !self.map.contains_key(*p) && !busy.contains(*p))
     }
 }
 
@@ -129,8 +138,8 @@ struct State {
     in_flight: HashSet<Job>,
     /// Files to keep read, most important first.
     reads: Vec<PathBuf>,
-    /// The file the reader thread is reading right now.
-    reading: Option<PathBuf>,
+    /// Files the reader threads are reading right now.
+    reading: HashSet<PathBuf>,
     bytes: ByteCache,
     shutdown: bool,
 }
@@ -182,7 +191,7 @@ impl Loader {
                 jobs: VecDeque::new(),
                 in_flight: HashSet::new(),
                 reads: Vec::new(),
-                reading: None,
+                reading: HashSet::new(),
                 bytes: ByteCache::new(READ_BUDGET),
                 shutdown: false,
             }),
@@ -205,13 +214,15 @@ impl Loader {
                     .expect("spawn decoder thread")
             })
             .collect();
-        let reader_shared = shared.clone();
-        workers.push(
-            std::thread::Builder::new()
-                .name("reader".into())
-                .spawn(move || reader(reader_shared))
-                .expect("spawn reader thread"),
-        );
+        for i in 0..READERS {
+            let reader_shared = shared.clone();
+            workers.push(
+                std::thread::Builder::new()
+                    .name(format!("reader-{i}"))
+                    .spawn(move || reader(reader_shared))
+                    .expect("spawn reader thread"),
+            );
+        }
         Self {
             shared,
             results: rx,
@@ -296,9 +307,9 @@ fn reader(shared: Arc<Shared>) {
                 if st.shutdown {
                     return;
                 }
-                let next = st.bytes.next_to_read(&st.reads).cloned();
+                let next = st.bytes.next_to_read(&st.reads, &st.reading).cloned();
                 if let Some(p) = next {
-                    st.reading = Some(p.clone());
+                    st.reading.insert(p.clone());
                     break p;
                 }
                 st = shared.wake_reader.wait(st).unwrap();
@@ -306,7 +317,7 @@ fn reader(shared: Arc<Shared>) {
         };
         let bytes = super::archive::read(&path).ok().map(Arc::new);
         let mut st = shared.state.lock().unwrap();
-        st.reading = None;
+        st.reading.remove(&path);
         match bytes {
             Some(b) => st.bytes.insert(path, b),
             // Unreadable: drop it from the list so we do not spin on it; the
@@ -315,6 +326,8 @@ fn reader(shared: Arc<Shared>) {
         }
         drop(st);
         shared.wake.notify_all();
+        // The other reader may be waiting for room in the budget or work.
+        shared.wake_reader.notify_all();
     }
 }
 
@@ -329,7 +342,7 @@ fn worker(shared: Arc<Shared>, tx: Sender<Done>, ctx: egui::Context) {
                 if let Some(j) = st.jobs.pop_front() {
                     // The reader is fetching exactly this file: wait for it
                     // instead of reading it twice (matters on a NAS).
-                    while st.reading.as_ref() == Some(&j.path) && !st.shutdown {
+                    while st.reading.contains(&j.path) && !st.shutdown {
                         st = shared.wake.wait(st).unwrap();
                     }
                     let cached = st.bytes.get(&j.path);
@@ -592,18 +605,22 @@ mod tests {
         let b = PathBuf::from("b");
         let c = PathBuf::from("c");
         let order = vec![a.clone(), b.clone(), c.clone()];
+        let none = HashSet::new();
         let mut cache = ByteCache::new(10);
-        assert_eq!(cache.next_to_read(&order), Some(&a));
+        assert_eq!(cache.next_to_read(&order, &none), Some(&a));
+        // The other reader is on `a`: take the next one.
+        let busy: HashSet<PathBuf> = [a.clone()].into();
+        assert_eq!(cache.next_to_read(&order, &busy), Some(&b));
         cache.insert(a.clone(), Arc::new(vec![0; 4]));
-        assert_eq!(cache.next_to_read(&order), Some(&b));
+        assert_eq!(cache.next_to_read(&order, &none), Some(&b));
         cache.insert(b.clone(), Arc::new(vec![0; 6]));
         // Budget reached: stop reading further ahead.
-        assert_eq!(cache.next_to_read(&order), None);
+        assert_eq!(cache.next_to_read(&order, &none), None);
         // Moved on: a is dropped, which makes room for c.
         let order = vec![b.clone(), c.clone()];
         cache.retain(&order);
         assert!(!cache.contains(&a));
         assert_eq!(cache.total(), 6);
-        assert_eq!(cache.next_to_read(&order), Some(&c));
+        assert_eq!(cache.next_to_read(&order, &none), Some(&c));
     }
 }

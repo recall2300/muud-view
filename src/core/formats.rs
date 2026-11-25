@@ -203,6 +203,144 @@ pub fn embedded_jpegs(bytes: &[u8]) -> Vec<&[u8]> {
     found
 }
 
+/// How much of a RAW file is read to find its preview.
+const RAW_HEAD: usize = 512 * 1024;
+/// A preview further into the file than this is not worth the trick.
+const RAW_MAX_SPARSE: u64 = 256 * 1024 * 1024;
+
+/// Reads only what a RAW file's preview needs: the header (with the EXIF
+/// data) and the largest JPEG its TIFF directories point to, placed at
+/// their original offsets in an otherwise empty buffer — so offsets in the
+/// EXIF data stay valid. A 50 MB RAW on a NAS costs a few MB instead of
+/// 50. `None` when the layout is unknown (CR3, CRW, …): read it all.
+pub fn read_raw_preview(path: &Path) -> Option<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    if !RAW_EXTENSIONS.contains(&ext(path).as_str()) {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    if len as usize <= RAW_HEAD * 2 {
+        return None; // small anyway
+    }
+    let mut head = vec![0u8; RAW_HEAD];
+    f.read_exact(&mut head).ok()?;
+    let (offset, size) = if head.starts_with(b"FUJIFILMCCD-RAW") {
+        // RAF: the JPEG's offset and length sit at fixed places.
+        let be = |i: usize| u32::from_be_bytes(head[i..i + 4].try_into().unwrap()) as u64;
+        (be(84), be(88))
+    } else {
+        largest_tiff_jpeg(&head)?
+    };
+    if size == 0 || offset + size > len || offset + size > RAW_MAX_SPARSE {
+        return None;
+    }
+    let end = (offset + size) as usize;
+    let mut buf = vec![0u8; end.max(RAW_HEAD)];
+    buf[..RAW_HEAD].copy_from_slice(&head);
+    if end > RAW_HEAD {
+        let start = (offset as usize).max(RAW_HEAD);
+        f.seek(SeekFrom::Start(start as u64)).ok()?;
+        f.read_exact(&mut buf[start..end]).ok()?;
+    }
+    Some(buf)
+}
+
+/// The largest JPEG (offset, length) referenced by the TIFF directories in
+/// `head`: thumbnail tags, or JPEG-compressed strips (CR2, NEF, ARW, DNG,
+/// ORF, RW2, PEF all use one of the two).
+fn largest_tiff_jpeg(head: &[u8]) -> Option<(u64, u64)> {
+    let le = match head.get(..2)? {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let u16_at = |i: usize| -> Option<u32> {
+        let b: [u8; 2] = head.get(i..i + 2)?.try_into().ok()?;
+        Some(if le {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        } as u32)
+    };
+    let u32_at = |i: usize| -> Option<u32> {
+        let b: [u8; 4] = head.get(i..i + 4)?.try_into().ok()?;
+        Some(if le {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
+    };
+    // A value of `count` items of `ty` at entry `e`: inline or at an offset.
+    let first_value = |e: usize| -> Option<u32> {
+        let ty = u16_at(e + 2)?;
+        match ty {
+            3 => u16_at(e + 8),
+            4 | 13 => {
+                let count = u32_at(e + 4)?;
+                if count == 1 {
+                    u32_at(e + 8)
+                } else {
+                    u32_at(u32_at(e + 8)? as usize)
+                }
+            }
+            _ => None,
+        }
+    };
+    let mut best: Option<(u64, u64)> = None;
+    let mut queue = vec![u32_at(4)? as usize];
+    let mut seen = 0;
+    while let Some(ifd) = queue.pop() {
+        seen += 1;
+        if seen > 32 || ifd == 0 || ifd + 2 > head.len() {
+            continue;
+        }
+        let n = u16_at(ifd)? as usize;
+        let (mut jif, mut jlen, mut strip, mut strip_len, mut compression) =
+            (None, None, None, None, None);
+        for k in 0..n.min(512) {
+            let e = ifd + 2 + k * 12;
+            match u16_at(e)? {
+                0x0201 => jif = first_value(e),
+                0x0202 => jlen = first_value(e),
+                0x0111 => strip = first_value(e),
+                0x0117 => strip_len = first_value(e),
+                0x0103 => compression = first_value(e),
+                // SubIFDs and the EXIF directory may hold more previews.
+                0x014A => {
+                    let count = u32_at(e + 4)? as usize;
+                    if count == 1 {
+                        queue.push(u32_at(e + 8)? as usize);
+                    } else {
+                        let at = u32_at(e + 8)? as usize;
+                        for i in 0..count.min(8) {
+                            if let Some(o) = u32_at(at + i * 4) {
+                                queue.push(o as usize);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut consider = |o: Option<u32>, l: Option<u32>| {
+            if let (Some(o), Some(l)) = (o, l) {
+                if best.is_none_or(|(_, bl)| l as u64 > bl) {
+                    best = Some((o as u64, l as u64));
+                }
+            }
+        };
+        consider(jif, jlen);
+        if matches!(compression, Some(6) | Some(7)) {
+            consider(strip, strip_len);
+        }
+        if let Some(next) = u32_at(ifd + 2 + n * 12) {
+            queue.push(next as usize);
+        }
+    }
+    best
+}
+
 /// A camera RAW file: its largest embedded JPEG, turned by the RAW's own
 /// orientation tag (the preview usually carries none).
 fn raw(
@@ -309,6 +447,36 @@ mod tests {
         assert_eq!((d.width, d.height), (2, 1));
         let p = d.frames[0].image.pixels[0];
         assert_eq!((p.r(), p.g(), p.b()), (10, 30, 50));
+    }
+
+    #[test]
+    fn raw_files_are_read_only_up_to_their_preview() {
+        let preview = jpeg(300, 200, [255, 0, 0]);
+        let at: u32 = 1_200_000; // past the header that is read
+        let mut b = b"II*\0\x08\0\0\0".to_vec();
+        b.extend_from_slice(&3u16.to_le_bytes());
+        b.extend_from_slice(&[0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0]);
+        b.extend_from_slice(&[0x01, 0x02, 4, 0, 1, 0, 0, 0]);
+        b.extend_from_slice(&at.to_le_bytes());
+        b.extend_from_slice(&[0x02, 0x02, 4, 0, 1, 0, 0, 0]);
+        b.extend_from_slice(&(preview.len() as u32).to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes());
+        b.resize(at as usize, 0x55);
+        b.extend_from_slice(&preview);
+        b.resize(b.len() + 3_000_000, 0x66); // sensor data after it
+        let dir = crate::core::archive::tests::temp_dir("rawread");
+        let p = dir.join("IMG_2.NEF");
+        std::fs::write(&p, &b).unwrap();
+        let read = read_raw_preview(&p).expect("partial read");
+        assert_eq!(read.len(), at as usize + preview.len());
+        assert!(read.len() < b.len() / 2);
+        // The general reader uses it, and it decodes like the whole file.
+        assert_eq!(crate::core::archive::read(&p).unwrap().len(), read.len());
+        let d = decode(Extra::Raw, &read, &p, DecodeOpts::full(8192), &mut |_| {}).unwrap();
+        assert_eq!((d.width, d.height), (200, 300));
+        // Not a RAW, or unknown layout: read normally.
+        assert!(read_raw_preview(&dir.join("x.jpg")).is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

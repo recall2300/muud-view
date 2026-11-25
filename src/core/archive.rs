@@ -6,8 +6,11 @@
 //! path points inside one. Korean archives made on Windows usually store
 //! names in CP949 without the UTF-8 flag; those are decoded as CP949.
 
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::SystemTime;
 
 /// Archive types opened like folders.
 pub const ARCHIVE_EXTENSIONS: &[&str] = &["zip", "cbz"];
@@ -48,24 +51,65 @@ pub fn is_virtual(path: &Path) -> bool {
     !path.exists() && split(path).is_some()
 }
 
+/// An open archive with its entry names decoded once.
+struct Open {
+    stamp: (u64, Option<SystemTime>),
+    zip: zip::ZipArchive<std::fs::File>,
+    names: HashMap<String, usize>,
+}
+
+/// Recently used archives, kept open: reading an entry then costs one
+/// check of the file's size and time instead of reopening it and parsing
+/// its whole directory (several extra round trips on a NAS).
+type Shared = Arc<Mutex<Open>>;
+
+fn cache() -> &'static Mutex<Vec<(PathBuf, Shared)>> {
+    static CACHE: OnceLock<Mutex<Vec<(PathBuf, Shared)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+const KEEP_OPEN: usize = 4;
+
+fn open(archive: &Path) -> std::io::Result<Shared> {
+    let meta = std::fs::metadata(archive)?;
+    let stamp = (meta.len(), meta.modified().ok());
+    let mut c = cache().lock().unwrap();
+    if let Some(i) = c.iter().position(|(p, _)| p == archive) {
+        let (p, entry) = c.remove(i);
+        if entry.lock().unwrap().stamp == stamp {
+            c.insert(0, (p, entry.clone()));
+            return Ok(entry);
+        }
+        // Changed on disk: open it again below.
+    }
+    let file = std::fs::File::open(archive)?;
+    let mut zip = zip::ZipArchive::new(file).map_err(std::io::Error::other)?;
+    let mut names = HashMap::new();
+    for i in 0..zip.len() {
+        if let Ok(e) = zip.by_index_raw(i) {
+            if !e.is_dir() {
+                names.insert(decode_name(e.name_raw()), i);
+            }
+        }
+    }
+    let entry = Arc::new(Mutex::new(Open { stamp, zip, names }));
+    c.insert(0, (archive.to_path_buf(), entry.clone()));
+    c.truncate(KEEP_OPEN);
+    Ok(entry)
+}
+
 /// The images in an archive as virtual paths, sorted naturally by their
 /// full names (so `ch2/10.jpg` comes after `ch2/9.jpg`).
 pub fn list(archive: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let file = std::fs::File::open(archive)?;
-    let mut zip = zip::ZipArchive::new(file).map_err(std::io::Error::other)?;
-    let mut names = Vec::new();
-    for i in 0..zip.len() {
-        let Ok(entry) = zip.by_index_raw(i) else {
-            continue;
-        };
-        if entry.is_dir() {
-            continue;
-        }
-        let name = decode_name(entry.name_raw());
-        if super::folder::is_image(Path::new(&name)) && !name.starts_with("__MACOSX/") {
-            names.push(name);
-        }
-    }
+    let open = open(archive)?;
+    let mut names: Vec<String> = open
+        .lock()
+        .unwrap()
+        .names
+        .keys()
+        .filter(|n| super::folder::is_image(Path::new(n)) && !n.starts_with("__MACOSX/"))
+        .cloned()
+        .collect();
     names.sort_by(|a, b| super::folder::natural_cmp(a, b));
     Ok(names
         .into_iter()
@@ -76,8 +120,12 @@ pub fn list(archive: &Path) -> std::io::Result<Vec<PathBuf>> {
         .collect())
 }
 
-/// Bytes of a file, or of an archive entry for a virtual path.
+/// Bytes of a file, or of an archive entry for a virtual path. RAW files
+/// are read only up to their preview image.
 pub fn read(path: &Path) -> std::io::Result<Vec<u8>> {
+    if let Some(b) = super::formats::read_raw_preview(path) {
+        return Ok(b);
+    }
     match std::fs::read(path) {
         Ok(b) => Ok(b),
         Err(e) => {
@@ -90,24 +138,18 @@ pub fn read(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 fn read_entry(archive: &Path, entry: &str) -> std::io::Result<Vec<u8>> {
-    let file = std::fs::File::open(archive)?;
-    let mut zip = zip::ZipArchive::new(file).map_err(std::io::Error::other)?;
-    for i in 0..zip.len() {
-        let name = match zip.by_index_raw(i) {
-            Ok(e) => decode_name(e.name_raw()),
-            Err(_) => continue,
-        };
-        if name == entry {
-            let mut f = zip.by_index(i).map_err(std::io::Error::other)?;
-            let mut out = Vec::with_capacity(f.size() as usize);
-            f.read_to_end(&mut out)?;
-            return Ok(out);
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::NotFound,
-        format!("{entry} not in archive"),
-    ))
+    let open = open(archive)?;
+    let mut open = open.lock().unwrap();
+    let Some(&i) = open.names.get(entry) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{entry} not in archive"),
+        ));
+    };
+    let mut f = open.zip.by_index(i).map_err(std::io::Error::other)?;
+    let mut out = Vec::with_capacity(f.size() as usize);
+    f.read_to_end(&mut out)?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -231,6 +273,15 @@ pub mod tests {
             std::fs::metadata(&archive).unwrap().len() as usize
         );
         assert!(read(&archive.join("missing.png")).is_err());
+        // Rewritten on disk: the cached directory is not used any more.
+        let zip = raw_zip(&[(b"other.png", &png([9, 9, 9, 255]))]);
+        std::fs::write(&archive, zip).unwrap();
+        let files = list(&archive).unwrap();
+        assert_eq!(files.len(), 1);
+        let img = image::load_from_memory(&read(&files[0]).unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(img.get_pixel(0, 0).0, [9, 9, 9, 255]);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
