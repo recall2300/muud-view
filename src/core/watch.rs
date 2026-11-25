@@ -9,16 +9,41 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use eframe::egui;
 
+/// How often the folder is listed while the window is in use.
 pub const INTERVAL: Duration = Duration::from_secs(2);
+/// ...while another window is in front (a NAS folder is listed over the
+/// network each time, so be gentle).
+pub const BACKGROUND_INTERVAL: Duration = Duration::from_secs(15);
 
-type Stamp = (u64, Option<SystemTime>);
+/// How the window is being used, which decides how often to look.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Activity {
+    /// In front: every [`INTERVAL`].
+    Focused,
+    /// Behind other windows: every [`BACKGROUND_INTERVAL`].
+    Background,
+    /// Minimised: not at all (a scan runs as soon as it comes back).
+    Hidden,
+}
+
+impl Activity {
+    pub fn interval(self, focused: Duration) -> Option<Duration> {
+        match self {
+            Activity::Focused => Some(focused),
+            Activity::Background => Some(BACKGROUND_INTERVAL.max(focused)),
+            Activity::Hidden => None,
+        }
+    }
+}
+
+pub type Stamp = (u64, Option<SystemTime>);
 
 /// Size and modification time of every image in a folder.
 #[derive(Default, Clone, Debug, PartialEq)]
@@ -27,6 +52,11 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Size and time of `path`, if it was in the listing.
+    pub fn stamp(&self, path: &Path) -> Option<Stamp> {
+        self.entries.get(path).copied()
+    }
+
     pub fn scan(dir: &Path) -> std::io::Result<Self> {
         let mut entries = HashMap::new();
         for e in std::fs::read_dir(dir)?.filter_map(Result::ok) {
@@ -70,6 +100,9 @@ pub struct Change {
     pub renamed: Vec<(PathBuf, PathBuf)>,
     /// Same name, new contents.
     pub modified: Vec<PathBuf>,
+    /// The new listing, so the file list can be sorted by time or size
+    /// without asking the disk (or the NAS) about every file again.
+    pub listing: Arc<Snapshot>,
 }
 
 impl Change {
@@ -83,7 +116,10 @@ impl Change {
 
 /// What changed between two listings.
 pub fn diff(old: &Snapshot, new: &Snapshot) -> Change {
-    let mut c = Change::default();
+    let mut c = Change {
+        listing: Arc::new(new.clone()),
+        ..Change::default()
+    };
     let mut removed: Vec<(&PathBuf, &Stamp)> = Vec::new();
     for (p, stamp) in &old.entries {
         match new.entries.get(p) {
@@ -130,37 +166,52 @@ pub struct Watcher {
     pub dir: PathBuf,
     rx: Receiver<Change>,
     stop: Arc<AtomicBool>,
+    /// Current interval in ms (`u64::MAX` = paused).
+    interval_ms: Arc<AtomicU64>,
+    scan_now: Arc<AtomicBool>,
+    focused_interval: Duration,
+    activity: std::cell::Cell<Activity>,
 }
 
 impl Watcher {
     pub fn start(dir: PathBuf, ctx: egui::Context, interval: Duration) -> Self {
         let (tx, rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
+        let interval_ms = Arc::new(AtomicU64::new(interval.as_millis() as u64));
+        let scan_now = Arc::new(AtomicBool::new(false));
+        let (flag, every, now_flag) = (stop.clone(), interval_ms.clone(), scan_now.clone());
         let d = dir.clone();
         let _ = std::thread::Builder::new()
             .name("folder-watch".into())
             .spawn(move || {
                 let mut last = Snapshot::scan(&d).unwrap_or_default();
                 loop {
-                    // Sleep in small steps so dropping the watcher is quick.
-                    let mut slept = Duration::ZERO;
-                    while slept < interval {
+                    // Sleep in small steps so dropping the watcher, a new
+                    // interval or "look now" take effect quickly.
+                    let mut slept = 0u64;
+                    loop {
                         if flag.load(Ordering::Relaxed) {
                             return;
                         }
-                        let step = Duration::from_millis(100).min(interval - slept);
-                        std::thread::sleep(step);
-                        slept += step;
+                        if now_flag.swap(false, Ordering::Relaxed) {
+                            break;
+                        }
+                        if slept >= every.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                        slept += 100;
                     }
                     // A folder that cannot be listed right now (network
                     // hiccup) is skipped, not treated as emptied.
                     let Ok(now) = Snapshot::scan(&d) else {
                         continue;
                     };
-                    let change = diff(&last, &now);
-                    last = now;
+                    let now = Arc::new(now);
+                    let mut change = diff(&last, &now);
+                    last = (*now).clone();
                     if !change.is_empty() {
+                        change.listing = now;
                         if tx.send(change).is_err() {
                             return;
                         }
@@ -168,7 +219,31 @@ impl Watcher {
                     }
                 }
             });
-        Self { dir, rx, stop }
+        Self {
+            dir,
+            rx,
+            stop,
+            interval_ms,
+            scan_now,
+            focused_interval: interval,
+            activity: std::cell::Cell::new(Activity::Focused),
+        }
+    }
+
+    /// Looks often while the window is in use, rarely behind other windows
+    /// and not at all while minimised; catches up at once when it returns.
+    pub fn set_activity(&self, a: Activity) {
+        let before = self.activity.replace(a);
+        if before == a {
+            return;
+        }
+        let ms = a
+            .interval(self.focused_interval)
+            .map_or(u64::MAX, |d| d.as_millis() as u64);
+        self.interval_ms.store(ms, Ordering::Relaxed);
+        if a == Activity::Focused {
+            self.scan_now.store(true, Ordering::Relaxed);
+        }
     }
 
     pub fn poll(&self) -> Vec<Change> {
@@ -213,6 +288,56 @@ mod tests {
         assert!(c.renamed.is_empty());
         assert_eq!(c.removed.len(), 2);
         assert_eq!(c.added.len(), 2);
+    }
+
+    #[test]
+    fn activity_sets_how_often_to_look() {
+        let two = Duration::from_secs(2);
+        assert_eq!(Activity::Focused.interval(two), Some(two));
+        assert_eq!(
+            Activity::Background.interval(two),
+            Some(BACKGROUND_INTERVAL)
+        );
+        assert_eq!(Activity::Hidden.interval(two), None);
+        let old = Snapshot::from(&[("a.jpg", 10, 1)]);
+        let new = Snapshot::from(&[("a.jpg", 10, 1), ("b.jpg", 20, 2)]);
+        let c = diff(&old, &new);
+        assert_eq!(c.listing.stamp(Path::new("b.jpg")).map(|s| s.0), Some(20));
+    }
+
+    #[test]
+    fn hidden_window_stops_looking_until_it_returns() {
+        let dir = std::env::temp_dir().join(format!(
+            "muud-watch-idle-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let w = Watcher::start(
+            dir.clone(),
+            egui::Context::default(),
+            Duration::from_millis(100),
+        );
+        w.set_activity(Activity::Hidden);
+        std::thread::sleep(Duration::from_millis(250));
+        std::fs::write(dir.join("new.png"), b"x").unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(w.poll().is_empty(), "no scans while hidden");
+        w.set_activity(Activity::Focused);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut added = Vec::new();
+        while added.is_empty() && std::time::Instant::now() < deadline {
+            for c in w.poll() {
+                added.extend(c.added);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(added, vec![dir.join("new.png")]);
+        drop(w);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

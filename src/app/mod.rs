@@ -856,6 +856,7 @@ impl MuudApp {
             None => self.start_compare.is_none(),
         };
         let ready = self.lib.is_empty()
+            || self.grid
             || (self.shown.is_some() && !self.lib.full_pending() && compare_ready);
         let timed_out = job.started.elapsed() > Duration::from_secs(60);
         if !job.requested && ((ready && job.frames > 20) || timed_out) {
@@ -926,6 +927,24 @@ impl eframe::App for MuudApp {
         self.poll_jobs();
         self.poll_watcher();
         self.check_compare();
+        // The grid shows thumbnails; the big images wait until it closes.
+        self.lib.set_idle(self.grid);
+        if let Some(w) = &self.watcher {
+            use crate::core::watch::Activity;
+            let (focused, minimized) = ctx.input(|i| {
+                (
+                    i.viewport().focused.unwrap_or(true),
+                    i.viewport().minimized.unwrap_or(false),
+                )
+            });
+            w.set_activity(if minimized {
+                Activity::Hidden
+            } else if focused {
+                Activity::Focused
+            } else {
+                Activity::Background
+            });
+        }
         if self.shown.is_some() && self.compare.is_none() {
             if let Some(mode) = self.start_compare.take() {
                 self.start_compare();

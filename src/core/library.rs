@@ -67,6 +67,8 @@ pub struct Library {
     rapid: bool,
     /// Kept decoded whatever the position (image A while comparing).
     pinned: Option<PathBuf>,
+    /// Nothing is decoded or read ahead (the thumbnail grid is showing).
+    idle: bool,
     loader: Loader,
 }
 
@@ -83,6 +85,7 @@ impl Library {
             want_full: None,
             rapid: false,
             pinned: None,
+            idle: false,
             loader,
         }
     }
@@ -185,6 +188,16 @@ impl Library {
         list
     }
 
+    /// Stops (or resumes) decoding and reading ahead, e.g. while the
+    /// thumbnail grid shows: moving through it would otherwise decode the
+    /// big images under the cursor.
+    pub fn set_idle(&mut self, idle: bool) {
+        if self.idle != idle {
+            self.idle = idle;
+            self.request();
+        }
+    }
+
     pub fn is_rapid(&self) -> bool {
         self.rapid
     }
@@ -201,7 +214,7 @@ impl Library {
     /// two ahead in the direction of travel, one behind, then one more ahead.
     /// While a key is held only the current one.
     pub fn wanted(&self) -> Vec<PathBuf> {
-        if self.files.is_empty() {
+        if self.files.is_empty() || self.idle {
             return Vec::new();
         }
         if self.rapid {
@@ -213,7 +226,7 @@ impl Library {
     /// Files whose bytes should be in memory: the current one, the next
     /// [`READ_AHEAD`] in the direction of travel and two behind.
     pub fn read_list(&self) -> Vec<PathBuf> {
-        if self.files.is_empty() {
+        if self.files.is_empty() || self.idle {
             return Vec::new();
         }
         if self.rapid {
@@ -553,7 +566,15 @@ impl Library {
                 .unwrap_or_else(|| b.clone())
         });
         if changed {
-            super::folder::sort_files(&mut self.files, sort, desc);
+            // Size and time from the watcher's listing: no stat per file.
+            let listing = change.listing.clone();
+            super::folder::sort_files_with(&mut self.files, sort, desc, |p| {
+                listing.stamp(p).or_else(|| {
+                    std::fs::metadata(p)
+                        .ok()
+                        .map(|m| (m.len(), m.modified().ok()))
+                })
+            });
         }
         let result = match current.and_then(|c| self.files.iter().position(|p| *p == c)) {
             Some(i) => {
@@ -910,6 +931,18 @@ mod tests {
         lib.go_to(2);
         assert!(lib.full_of(&cur).is_none());
         assert!(lib.full_of(&next).is_some());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn idle_decodes_and_reads_nothing() {
+        let (mut lib, dir) = lib_with(5);
+        lib.set_idle(true);
+        lib.go_to(3);
+        assert!(lib.jobs().is_empty());
+        assert!(lib.read_list().is_empty());
+        lib.set_idle(false);
+        assert_eq!(lib.jobs()[0].path, lib.files[3]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

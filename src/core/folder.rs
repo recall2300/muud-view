@@ -105,12 +105,26 @@ pub fn sibling(container: &Path, delta: i32) -> Option<PathBuf> {
 }
 
 pub fn sort_files(files: &mut [PathBuf], sort: crate::core::settings::SortBy, desc: bool) {
+    sort_files_with(files, sort, desc, |p| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()))
+    });
+}
+
+/// [`sort_files`] with size and time from `stamp` (e.g. the folder
+/// watcher's listing) instead of asking the disk about each file.
+pub fn sort_files_with(
+    files: &mut [PathBuf],
+    sort: crate::core::settings::SortBy,
+    desc: bool,
+    stamp: impl Fn(&Path) -> Option<super::watch::Stamp>,
+) {
     use crate::core::settings::SortBy;
-    let meta = |p: &Path| std::fs::metadata(p).ok();
     match sort {
         SortBy::Name => files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b))),
-        SortBy::Modified => files.sort_by_cached_key(|p| meta(p).and_then(|m| m.modified().ok())),
-        SortBy::Size => files.sort_by_cached_key(|p| meta(p).map(|m| m.len()).unwrap_or(0)),
+        SortBy::Modified => files.sort_by_cached_key(|p| stamp(p).and_then(|s| s.1)),
+        SortBy::Size => files.sort_by_cached_key(|p| stamp(p).map_or(0, |s| s.0)),
     }
     if desc {
         files.reverse();
