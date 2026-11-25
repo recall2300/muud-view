@@ -104,6 +104,7 @@ gh attestation verify .\muud-view-v0.1.0-windows-x64.zip --repo recall2300/muud-
 - muud view: [MIT](LICENSE)
 - 포함 폰트: Inter Tight, IBM Plex Mono — SIL Open Font License 1.1 (`assets/fonts/OFL-*.txt`)
 - 한글은 Windows의 맑은 고딕을 실행 시 읽어 씁니다(파일을 포함하지 않음).
+- JPEG 디코딩: **libjpeg-turbo** — IJG 라이선스 + BSD-3-Clause (+ zlib), 정적 링크. 이 소프트웨어는 부분적으로 Independent JPEG Group의 작업에 기반합니다 (*This software is based in part on the work of the Independent JPEG Group.*). 전문은 `licenses/libjpeg-turbo-*`
 - 사용한 Rust 라이브러리는 모두 MIT/Apache-2.0/BSD 계열 허용 라이선스입니다. CI의 `cargo deny`가 GPL/LGPL 같은 카피레프트 라이선스가 섞이면 빌드를 실패시킵니다. 각 릴리스에는 전체 고지문 `THIRD_PARTY_NOTICES.html`이 들어 있습니다.
 
 muud view는 처음부터 새로 작성했습니다. 기능과 단축키는 공개 문서와 일반적인 뷰어 사용 관례만 참고했고, 다른 뷰어의 바이너리·코드·리소스는 분석하거나 사용하지 않았습니다.

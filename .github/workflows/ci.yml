@@ -19,6 +19,8 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy, rustfmt
+      # NASM: libjpeg-turbo's SIMD code (the build fails without it).
+      - uses: ilammy/setup-nasm@v1
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       # A failing test is also reported as an annotation on the run
@@ -45,6 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      # NASM: libjpeg-turbo's SIMD code (the build fails without it).
+      - uses: ilammy/setup-nasm@v1
       # Decode times divided by a calibration loop, compared with
       # bench/baseline.txt; fails if more than 30% slower. Results appear
       # as annotations and in the run summary.

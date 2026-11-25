@@ -286,7 +286,9 @@ impl Library {
             .into_iter()
             .filter(|p| !self.cache.contains_key(p))
             .map(|p| {
-                if keep.contains(&p) && self.full_of(&p).is_none() {
+                // While a key is held, the cheapest decode (shrunk in the
+                // decoder itself); full pixels only once browsing settles.
+                if keep.contains(&p) && self.full_of(&p).is_none() && !self.rapid {
                     Job::screen_full(p)
                 } else {
                     Job::screen(p)

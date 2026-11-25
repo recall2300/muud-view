@@ -100,6 +100,18 @@ fn bench_ci() {
             }),
         ),
         (
+            // Screen size while keeping the full pixels (current and next
+            // images): a full decode plus shrinking.
+            "jpeg_screen_full",
+            median(|| {
+                let keep = DecodeOpts {
+                    keep_full: true,
+                    ..screen
+                };
+                black_box(decode_bytes(&jpeg, path, keep).unwrap());
+            }),
+        ),
+        (
             "downscale",
             median(|| {
                 black_box(downscale(&big, [2160, 1440]));

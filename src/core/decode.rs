@@ -366,23 +366,30 @@ fn decode_jpeg(
     orientation: Orientation,
     exif: Option<ExifInfo>,
 ) -> Result<Decoded, String> {
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::DecoderOptions;
-
-    let zopts = DecoderOptions::default()
-        .jpeg_set_out_colorspace(ColorSpace::RGBA)
-        .set_max_width(1 << 16)
-        .set_max_height(1 << 16);
-    let mut dec = zune_jpeg::JpegDecoder::new_with_options(Cursor::new(bytes), zopts);
-    dec.decode_headers().map_err(|e| format!("{e:?}"))?;
-    let (w, h) = dec.dimensions().ok_or("no dimensions")?;
-    let gray = matches!(dec.input_colorspace(), Some(ColorSpace::Luma));
-    let icc = if opts.color { dec.icc_profile() } else { None };
-    let mut pixels = vec![Color32::BLACK; w * h];
-    dec.decode_into(bytemuck::cast_slice_mut(&mut pixels))
-        .map_err(|e| format!("{e:?}"))?;
-    let image = ColorImage::new([w, h], pixels);
+    // libjpeg-turbo first (SIMD, and it can shrink while decoding); zune-jpeg
+    // for what it does not take (CMYK, lossless, damaged files).
+    let px = match turbo_pixels(bytes, opts, orientation) {
+        Ok(px) => px,
+        Err(_) => zune_pixels(bytes)?,
+    };
+    let JpegPixels {
+        image,
+        full_size: [w, h],
+        gray,
+    } = px;
+    let icc = if opts.color {
+        icc_from_jpeg(bytes)
+    } else {
+        None
+    };
+    // A shrunk decode is never kept as "full" (it is not).
+    let shrunk = image.size != [w, h];
+    let opts = DecodeOpts {
+        keep_full: opts.keep_full && !shrunk,
+        ..opts
+    };
     let (mut image, mut tiles, reduced, kept) = finish_keep(image, opts, orientation);
+    let reduced = reduced || shrunk;
     let tiled_size = tiled_size(&tiles);
     let (profile, color_converted) = manage_color(icc.as_deref(), &mut image, &mut tiles);
 
@@ -420,6 +427,110 @@ fn decode_jpeg(
     // Not when colours were converted: that would cost a full-size
     // conversion for every image, zoomed or not.
     Ok(with_full(decoded, kept.filter(|_| !color_converted)))
+}
+
+struct JpegPixels {
+    image: ColorImage,
+    /// The JPEG's own size (the image may be smaller if shrunk on decode).
+    full_size: [usize; 2],
+    gray: bool,
+}
+
+/// The scaling factor to decode a `size` JPEG at so it is still at least
+/// `target` (and never larger than needed): libjpeg-turbo shrinks by n/8 in
+/// the IDCT itself, much cheaper than decoding everything and shrinking.
+pub fn scale_for(size: [usize; 2], target: [usize; 2]) -> turbojpeg::ScalingFactor {
+    turbojpeg::Decompressor::supported_scaling_factors()
+        .into_iter()
+        .filter(|f| f.num() <= f.denom())
+        .filter(|f| f.scale(size[0]) >= target[0] && f.scale(size[1]) >= target[1])
+        .min_by(|a, b| (a.num() * b.denom()).cmp(&(b.num() * a.denom())))
+        .unwrap_or(turbojpeg::ScalingFactor::ONE)
+}
+
+fn turbo_pixels(bytes: &[u8], opts: DecodeOpts, o: Orientation) -> Result<JpegPixels, String> {
+    use turbojpeg::{Colorspace, Decompressor, Image, PixelFormat};
+    let mut d = Decompressor::new().map_err(|e| e.to_string())?;
+    let header = d.read_header(bytes).map_err(|e| e.to_string())?;
+    if header.is_lossless || matches!(header.colorspace, Colorspace::CMYK | Colorspace::YCCK) {
+        return Err("left to zune-jpeg".into());
+    }
+    let (w, h) = (header.width, header.height);
+    // Screen quality without keeping the full pixels: shrink while decoding.
+    let factor = match opts.fit {
+        Some(fit) if !opts.keep_full => match screen_target([w, h], fit, o) {
+            Some(t) => scale_for([w, h], t),
+            None => turbojpeg::ScalingFactor::ONE,
+        },
+        _ => turbojpeg::ScalingFactor::ONE,
+    };
+    d.set_scaling_factor(factor).map_err(|e| e.to_string())?;
+    let (sw, sh) = (factor.scale(w), factor.scale(h));
+    let mut pixels = vec![Color32::BLACK; sw * sh];
+    let out = Image {
+        pixels: bytemuck::cast_slice_mut::<Color32, u8>(&mut pixels),
+        width: sw,
+        pitch: sw * 4,
+        height: sh,
+        format: PixelFormat::RGBA,
+    };
+    d.decompress(bytes, out).map_err(|e| e.to_string())?;
+    Ok(JpegPixels {
+        image: ColorImage::new([sw, sh], pixels),
+        full_size: [w, h],
+        gray: header.colorspace == Colorspace::Gray,
+    })
+}
+
+fn zune_pixels(bytes: &[u8]) -> Result<JpegPixels, String> {
+    use zune_core::colorspace::ColorSpace;
+    use zune_core::options::DecoderOptions;
+
+    let zopts = DecoderOptions::default()
+        .jpeg_set_out_colorspace(ColorSpace::RGBA)
+        .set_max_width(1 << 16)
+        .set_max_height(1 << 16);
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(Cursor::new(bytes), zopts);
+    dec.decode_headers().map_err(|e| format!("{e:?}"))?;
+    let (w, h) = dec.dimensions().ok_or("no dimensions")?;
+    let gray = matches!(dec.input_colorspace(), Some(ColorSpace::Luma));
+    let mut pixels = vec![Color32::BLACK; w * h];
+    dec.decode_into(bytemuck::cast_slice_mut(&mut pixels))
+        .map_err(|e| format!("{e:?}"))?;
+    Ok(JpegPixels {
+        image: ColorImage::new([w, h], pixels),
+        full_size: [w, h],
+        gray,
+    })
+}
+
+/// The ICC profile stored in a JPEG's APP2 segments (it may be split over
+/// several, numbered from 1).
+pub fn icc_from_jpeg(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut parts: Vec<(u8, &[u8])> = Vec::new();
+    let mut i = 2;
+    while i + 4 <= bytes.len() && bytes[i] == 0xFF {
+        let marker = bytes[i + 1];
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+        let len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+        let body = bytes.get(i + 4..i + 2 + len)?;
+        if marker == 0xE2 && body.len() > 14 && body.starts_with(b"ICC_PROFILE\0") {
+            parts.push((body[12], &body[14..]));
+        }
+        i += 2 + len;
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    parts.sort_by_key(|p| p.0);
+    Some(
+        parts
+            .into_iter()
+            .flat_map(|p| p.1.iter().copied())
+            .collect(),
+    )
 }
 
 /// Attaches the full-resolution pixels to a screen-size decode.
@@ -1193,6 +1304,50 @@ mod tests {
         assert!(d.full.is_none());
         let d = decode_bytes(&png_bytes(50, 50, [1, 1, 1, 255]), Path::new("b.png"), opts).unwrap();
         assert!(d.full.is_none());
+    }
+
+    #[test]
+    fn libjpeg_turbo_shrinks_while_decoding() {
+        // Smallest n/8 that still covers the target.
+        assert_eq!(scale_for([6960, 4640], [2160, 1440]).to_string(), "3/8");
+        assert_eq!(scale_for([6960, 4640], [870, 580]).to_string(), "1/8");
+        assert_eq!(scale_for([6960, 4640], [6960, 4640]).to_string(), "1/1");
+        let jpeg = synthetic_photo(1600, 1200);
+        let opts = DecodeOpts {
+            fit: Some([400, 300]),
+            ..DecodeOpts::full(8192)
+        };
+        let d = decode_bytes(&jpeg, Path::new("a.jpg"), opts).unwrap();
+        // Shown at 400x300, decoded from a 1/4 IDCT, original size kept.
+        assert_eq!(d.texture_size(), [400, 300]);
+        assert_eq!((d.width, d.height), (1600, 1200));
+        assert!(d.reduced);
+        // Same pixels as decoding everything and shrinking (roughly).
+        let full = decode_bytes(&jpeg, Path::new("a.jpg"), DecodeOpts::full(8192)).unwrap();
+        let small = downscale(&full.frames[0].image, [400, 300]);
+        let diff: u32 = small
+            .pixels
+            .iter()
+            .zip(&d.frames[0].image.pixels)
+            .map(|(a, b)| a.r().abs_diff(b.r()) as u32)
+            .sum::<u32>()
+            / (400 * 300);
+        assert!(diff < 6, "mean difference {diff}");
+    }
+
+    #[test]
+    fn icc_profile_is_read_from_app2_segments() {
+        let p3 = moxcms::ColorProfile::new_display_p3().encode().unwrap();
+        let img = image::RgbImage::from_pixel(8, 8, image::Rgb([200, 60, 60]));
+        let mut out = Vec::new();
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90);
+        use image::ImageEncoder;
+        enc.set_icc_profile(p3.clone()).unwrap();
+        enc.encode_image(&img).unwrap();
+        assert_eq!(icc_from_jpeg(&out), Some(p3));
+        let d = decode_bytes(&out, Path::new("p3.jpg"), DecodeOpts::full(8192)).unwrap();
+        assert!(d.color_converted);
+        assert_eq!(icc_from_jpeg(&synthetic_photo(16, 16)), None);
     }
 
     #[test]

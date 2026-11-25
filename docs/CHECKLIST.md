@@ -24,7 +24,8 @@ CI가 확인할 수 없는, 실제 Windows PC에서만 볼 수 있는 항목입�
 - [ ] 보는 중에 탐색기에서 같은 폴더에 사진을 추가·삭제·이름 변경 → 2초 안에 반영되고 보던 사진이 유지된다
 - [ ] 확대 시 오른쪽 아래 미니맵, 클릭·드래그로 이동, `/`로 끄기
 - [ ] 큰 GIF가 바로 재생을 시작한다
-- [ ] R6 Mark III 실제 JPEG로 `bench/compare_libjpeg_turbo.py`와 `bench_jpeg` 측정 → [BENCHMARKS.md](BENCHMARKS.md)에 기록
+- [ ] R6 Mark III 실제 JPEG로 `bench_jpeg` 측정 → [BENCHMARKS.md](BENCHMARKS.md)에 기록
+- [ ] 릴리스 zip에 `licenses/libjpeg-turbo-*` 두 파일이 있다
 
 ## 업무 도구 (v0.5)
 - [ ] 맞춤 보기에서 이미지를 끌어 카카오톡·팀즈·메일 창에 놓기 → 파일이 첨부된다. 확대 중에는 `Ctrl`+드래그. 놓은 뒤 이미지가 커서를 따라다니지 않는다

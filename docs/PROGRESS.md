@@ -20,8 +20,25 @@
 | v0.6 | ✅ M25 · ✅ M26 · ✅ M27 · ✅ M28 · ✅ M29 — v0.6.0 자동 릴리스 |
 | 배포·운영 | ✅ 업데이트 확인, 이슈 템플릿, winget·scoop 매니페스트, SignPath 검토 |
 | 성능 개선 (v0.6.1) | ✅ 검토한 7곳 — v0.6.1 자동 릴리스 |
+| libjpeg-turbo 전환 | 🔧 CI 확인 중 |
 
 ---
+
+## 2026-11-25 — JPEG 디코더를 libjpeg-turbo로 전환
+
+결정: BENCHMARKS.md에 남겨 둔 "libjpeg-turbo로 바꿀지"를 진행하기로 함 (사용자 승인).
+
+- **라이브러리** — `turbojpeg` 1.5 크레이트(Unlicense OR MIT)가 함께 들고 있는 libjpeg-turbo 3.1.0 소스를 CMake로 빌드해 **정적 링크**, SIMD 필수(`require-simd` — NASM이 없으면 빌드 실패하게 해서 느린 C 버전이 몰래 들어가지 않게). 단일 exe 그대로
+- **라이선스** — libjpeg-turbo는 IJG + BSD-3-Clause (+ SIMD 부분 zlib). `cargo deny`·`cargo about`은 C 라이브러리를 못 보므로 전문을 `assets/licenses/`에 두고 릴리스 zip의 `licenses/`에 넣음. IJG가 요구하는 문구("based in part on the work of the Independent JPEG Group")를 README 라이선스 절에. PLAN 원칙 2에 IJG와 C 라이브러리 처리 방법 추가
+- **두 가지 디코딩**
+  - 원본이 필요한 사진(현재와 앞쪽 3장 — 확대용 원본 보관): 전체 디코딩 → 축소. zune보다 약 1.4배
+  - 화면 크기만 필요한 사진(키를 누르고 넘길 때, 뒤쪽 사진, 썸네일): **디코딩 단계(IDCT)에서 n/8로 줄임** — 목표보다 작아지지 않는 가장 작은 배율을 골라(32.5MP→2160px이면 3/8) 나머지만 축소. 약 2.3배. 썸네일은 1/8
+  - 키를 누르고 넘기는 동안은 원본 보관을 하지 않고 이 빠른 경로만
+- **zune-jpeg는 대비용으로 남김** — CMYK·YCCK, 무손실 JPEG, libjpeg-turbo가 거부하는 손상된 파일은 예전처럼 zune-jpeg
+- **ICC** — zune이 주던 ICC 프로파일을 직접 읽음(APP2 `ICC_PROFILE` 조각을 번호순으로 이어 붙임)
+- **CI** — Windows 빌드·속도·릴리스 작업에 NASM 설치(`ilammy/setup-nasm`). 속도 검사에 "화면 크기 + 원본 보관" 항목 추가
+- 측정(2코어 서버, 합성 32.5MP 4:2:0): 원본 378~387 → 239~263ms, 화면 크기 444~496 → 188~209ms ([BENCHMARKS.md](BENCHMARKS.md))
+- 테스트 129 → 131개 (축소 배율 선택·축소 디코딩 결과가 전체 디코딩 후 축소와 같음, APP2의 ICC 읽기·P3 변환)
 
 ## 2026-11-25 — 성능 검토 마무리: 릴리스 빌드 테스트 실패 수정
 
