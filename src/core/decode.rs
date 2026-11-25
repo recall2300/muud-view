@@ -17,7 +17,7 @@ use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageFormat};
 use super::exif_info::{self, ExifInfo};
 
 /// Upper bound on decoded animation frames kept in memory (bytes).
-const MAX_ANIMATION_BYTES: usize = 768 * 1024 * 1024;
+pub(super) const MAX_ANIMATION_BYTES: usize = 768 * 1024 * 1024;
 
 /// How big the decoded pixels may be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +237,9 @@ pub(crate) fn decode_unguarded(
         .is_some_and(|n| n == super::guard::PANIC_FILE)
     {
         panic!("test panic");
+    }
+    if super::jxl::is_jxl(bytes) {
+        return super::jxl::decode(bytes, path, opts, partial);
     }
     if let Some(kind) = super::formats::detect(bytes, path) {
         return super::formats::decode(kind, bytes, path, opts, partial);
@@ -551,7 +554,7 @@ pub fn icc_from_jpeg(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Attaches the full-resolution pixels to a screen-size decode.
-fn with_full(mut d: Decoded, full: Option<ColorImage>) -> Decoded {
+pub(super) fn with_full(mut d: Decoded, full: Option<ColorImage>) -> Decoded {
     if let Some(img) = full {
         let mut f = d.clone();
         f.frames = vec![Frame {
@@ -703,7 +706,7 @@ pub(super) fn finish(
 /// [`finish`], also returning the full-resolution pixels when they were
 /// shrunk for the screen and [`DecodeOpts::keep_full`] asks for them (and
 /// they fit in one texture).
-fn finish_keep(
+pub(super) fn finish_keep(
     image: ColorImage,
     opts: DecodeOpts,
     o: Orientation,
@@ -740,7 +743,7 @@ fn finish_inner(
     (image, Vec::new(), reduced)
 }
 
-fn tiled_size(tiles: &[Tile]) -> [usize; 2] {
+pub(super) fn tiled_size(tiles: &[Tile]) -> [usize; 2] {
     tiles.iter().fold([0, 0], |[w, h], t| {
         [w.max(t.x + t.image.size[0]), h.max(t.y + t.image.size[1])]
     })
@@ -785,7 +788,11 @@ pub fn split_tiles(img: &ColorImage, side: usize) -> Vec<Tile> {
 
 /// Shrinks a freshly decoded image to screen size (if asked) or to what the
 /// GPU can hold. Returns whether it was shrunk for the screen.
-fn fit_for_display(image: ColorImage, opts: DecodeOpts, o: Orientation) -> (ColorImage, bool) {
+pub(super) fn fit_for_display(
+    image: ColorImage,
+    opts: DecodeOpts,
+    o: Orientation,
+) -> (ColorImage, bool) {
     if let Some(t) = opts.fit.and_then(|f| screen_target(image.size, f, o)) {
         // Never larger than the GPU limit either.
         let t = gpu_target(t, opts.max_side).unwrap_or(t);

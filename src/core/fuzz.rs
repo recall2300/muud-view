@@ -90,6 +90,15 @@ fn raw(preview: &[u8]) -> Vec<u8> {
     b
 }
 
+fn data(name: &str) -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data")
+            .join(name),
+    )
+    .unwrap()
+}
+
 /// One good file per format, named so the extension-based ones are found.
 pub(crate) fn seeds() -> Vec<(&'static str, Vec<u8>)> {
     let rgba = DynamicImage::ImageRgba8(gradient(40, 28));
@@ -127,6 +136,9 @@ pub(crate) fn seeds() -> Vec<(&'static str, Vec<u8>)> {
         ("a.psd", psd(false)),
         ("rle.psd", psd(true)),
         ("a.cr2", raw(&jpeg)),
+        ("lossy.jxl", data("lossy.jxl")),
+        ("alpha.jxl", data("alpha.jxl")),
+        ("anim.jxl", data("anim.jxl")),
     ]
 }
 

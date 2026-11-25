@@ -3,6 +3,7 @@
 | 종류 | 확장자 | 방법 |
 |---|---|---|
 | 일반 이미지 | jpg jpeg jfif png apng gif webp bmp tif tiff tga ico pnm qoi dds hdr exr | `image` 크레이트. JPEG는 libjpeg-turbo(SIMD, 화면용은 디코딩 단계에서 축소), CMYK·무손실·손상된 JPEG는 zune-jpeg |
+| JPEG XL | jxl | jxl-oxide (MIT OR Apache-2.0, 순수 Rust). 손실·무손실·투명·흑백·애니메이션, 넓은 색역·ICC는 sRGB로 변환(moxcms), Exif 정보 표시. JPEG보다 느림 — 12MP 한 장에 2코어 서버 약 0.8초 (미리 읽기가 가려 줌) |
 | SVG | svg | resvg (Apache-2.0 OR MIT). 보이는 크기로 그려서 확대해도 선명 (원본 화질은 긴 변 2048px 이상) |
 | Photoshop | psd | psd 크레이트 (MIT OR Apache-2.0). 파일에 저장된 **합성 이미지**만 — 레이어는 보지 않음. "호환성 최대화"를 끄고 저장한 PSD는 합성 이미지가 비어 있을 수 있음 |
 | 카메라 RAW | cr2 cr3 crw nef nrw arw srf sr2 dng raf orf rw2 pef srw rwl 3fr iiq x3f erf mrw | 카메라가 넣어 둔 **내장 JPEG 미리보기** 중 가장 큰 것 (대부분 원본 크기), RAW의 EXIF 회전 적용. RAW 현상은 하지 않음 |

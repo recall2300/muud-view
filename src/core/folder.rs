@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 /// File extensions muud-view can decode (lower case, without the dot).
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "webp", "bmp", "dib", "tif", "tiff", "tga",
-    "ico", "pnm", "pbm", "pgm", "ppm", "pam", "qoi", "dds", "hdr", "exr", "svg", "psd",
+    "ico", "pnm", "pbm", "pgm", "ppm", "pam", "qoi", "dds", "hdr", "exr", "svg", "psd", "jxl",
 ];
 
 pub fn is_image(path: &Path) -> bool {

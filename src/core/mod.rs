@@ -10,6 +10,7 @@ pub mod formats;
 mod fuzz;
 pub mod guard;
 pub mod history;
+pub mod jxl;
 pub mod keymap;
 pub mod library;
 pub mod loader;

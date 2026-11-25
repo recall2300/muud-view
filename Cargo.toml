@@ -49,6 +49,8 @@ encoding_rs = "0.8"
 # SVG (Apache-2.0 OR MIT) and Photoshop composite images (MIT OR Apache-2.0).
 resvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 psd = "0.3"
+# JPEG XL (MIT OR Apache-2.0), pure Rust; colours via moxcms, already used.
+jxl-oxide = { version = "0.12", default-features = false, features = ["rayon", "moxcms"] }
 # libjpeg-turbo (TurboJPEG API), built from source and linked statically.
 turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
 # ICC colour management (BSD-3-Clause OR Apache-2.0); already used by `image`.

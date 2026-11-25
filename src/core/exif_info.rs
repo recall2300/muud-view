@@ -75,6 +75,16 @@ pub fn read(bytes: &[u8]) -> Option<ExifInfo> {
     let exif = exif::Reader::new()
         .read_from_container(&mut std::io::Cursor::new(bytes))
         .ok()?;
+    Some(info(&exif))
+}
+
+/// From a bare TIFF block (as JPEG XL and HEIF files store Exif).
+pub fn read_tiff(tiff: Vec<u8>) -> Option<ExifInfo> {
+    let exif = exif::Reader::new().read_raw(tiff).ok()?;
+    Some(info(&exif))
+}
+
+fn info(exif: &exif::Exif) -> ExifInfo {
     let ascii = |tag| -> Option<String> {
         let f = exif.get_field(tag, In::PRIMARY)?;
         match &f.value {
@@ -135,8 +145,8 @@ pub fn read(bytes: &[u8]) -> Option<ExifInfo> {
             s
         });
 
-    let gps = gps_coord(&exif, Tag::GPSLatitude, Tag::GPSLatitudeRef, 'S').zip(gps_coord(
-        &exif,
+    let gps = gps_coord(exif, Tag::GPSLatitude, Tag::GPSLatitudeRef, 'S').zip(gps_coord(
+        exif,
         Tag::GPSLongitude,
         Tag::GPSLongitudeRef,
         'W',
@@ -146,7 +156,7 @@ pub fn read(bytes: &[u8]) -> Option<ExifInfo> {
         format!("{}{:.0}m", if below { "-" } else { "" }, a)
     });
 
-    Some(ExifInfo {
+    ExifInfo {
         make: ascii(Tag::Make),
         model: ascii(Tag::Model),
         lens: ascii(Tag::LensModel),
@@ -161,7 +171,7 @@ pub fn read(bytes: &[u8]) -> Option<ExifInfo> {
         gps,
         altitude,
         orientation: uint(Tag::Orientation).unwrap_or(1),
-    })
+    }
 }
 
 fn gps_coord(exif: &exif::Exif, tag: Tag, ref_tag: Tag, negative: char) -> Option<f64> {
