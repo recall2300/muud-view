@@ -21,9 +21,15 @@
 | 배포·운영 | ✅ 업데이트 확인, 이슈 템플릿, winget·scoop 매니페스트, SignPath 검토 |
 | 성능 개선 (v0.6.1) | ✅ 검토한 7곳 — v0.6.1 자동 릴리스 |
 | libjpeg-turbo 전환 | ✅ v0.6.2 자동 릴리스 |
-| 검토 2차 (v0.7) | ✅ 크래시 방지 · ✅ 깨진 파일 테스트 · ✅ 메모리 한도 · ✅ JPEG XL · ⬜ 코드 정리 · ⬜ AVIF |
+| 검토 2차 (v0.7) | ✅ 크래시 방지 · ✅ 깨진 파일 테스트 · ✅ 메모리 한도 · ✅ JPEG XL · ✅ 코드 정리 · ⬜ AVIF |
 
 ---
+
+## 2026-11-25 — 큰 파일 나누기 (동작 변경 없음)
+
+- `core/decode.rs` 1,509줄 → `core/decode/`: `mod.rs`(타입·진입점·일반 포맷 520줄), `jpeg.rs`(libjpeg-turbo·zune-jpeg·ICC), `resize.rs`(화면·GPU 축소, 타일, 회전), `animation.rs`(GIF·WebP), `tests.rs`
+- `app/mod.rs` 1,073줄 → 546줄 + `navigation.rs`(열기·넘기기·비교), `textures.rs`(GPU 업로드), `background.rs`(백그라운드 작업·폴더 감시·탐색기에서 연 파일·붙여넣기·스크린샷)
+- 옮기기만 하고 코드는 그대로, 테스트 142개 그대로 통과
 
 ## 2026-11-25 — JPEG XL 지원
 
