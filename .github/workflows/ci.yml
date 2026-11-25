@@ -12,6 +12,12 @@ jobs:
   windows:
     name: Build & test (Windows)
     runs-on: windows-latest
+    # libjpeg-turbo's C code is compiled with clang-cl (LLVM, on the
+    # runner) through Ninja: MSVC's build decodes about 1.6x slower.
+    env:
+      CMAKE_GENERATOR: Ninja
+      CC_x86_64_pc_windows_msvc: clang-cl
+      CXX_x86_64_pc_windows_msvc: clang-cl
     steps:
       - uses: actions/checkout@v4
       # Also registers problem matchers, so compiler errors show up as
@@ -21,6 +27,7 @@ jobs:
           components: clippy, rustfmt
       # NASM: libjpeg-turbo's SIMD code (the build fails without it).
       - uses: ilammy/setup-nasm@v1
+      - run: choco install ninja --no-progress -y
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       # A failing test is also reported as an annotation on the run
@@ -44,8 +51,7 @@ jobs:
   speed:
     name: Speed (regression check)
     runs-on: windows-latest
-    # Experiment: libjpeg-turbo's C code compiled with clang-cl (LLVM, on
-    # the runner) instead of MSVC, through Ninja.
+    # libjpeg-turbo's C code with clang-cl (see the build job).
     env:
       CMAKE_GENERATOR: Ninja
       CC_x86_64_pc_windows_msvc: clang-cl

@@ -111,6 +111,12 @@ muud view는 처음부터 새로 작성했습니다. 기능과 단축키는 공�
 
 ## 개발
 
+빌드에는 Rust 외에 **CMake**와 **NASM**이 필요합니다(정적 링크하는 libjpeg-turbo). Windows에서는 Visual Studio Build Tools에 더해, 릴리스와 같은 속도를 원하면 LLVM의 clang-cl로 빌드합니다:
+
+```powershell
+$env:CMAKE_GENERATOR = "Ninja"; $env:CC_x86_64_pc_windows_msvc = "clang-cl"; $env:CXX_x86_64_pc_windows_msvc = "clang-cl"
+```
+
 ```bash
 cargo run -- path/to/image.jpg   # 실행
 cargo test                       # 테스트

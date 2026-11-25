@@ -64,6 +64,11 @@ jobs:
     runs-on: windows-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      # libjpeg-turbo's C code with clang-cl through Ninja (MSVC's build
+      # decodes about 1.6x slower).
+      CMAKE_GENERATOR: Ninja
+      CC_x86_64_pc_windows_msvc: clang-cl
+      CXX_x86_64_pc_windows_msvc: clang-cl
     steps:
       - name: Check version
         shell: pwsh
@@ -75,6 +80,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       # NASM: libjpeg-turbo's SIMD code (the build fails without it).
       - uses: ilammy/setup-nasm@v1
+      - run: choco install ninja --no-progress -y
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-about,cargo-deny

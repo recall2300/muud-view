@@ -1,5 +1,7 @@
 # Workload time / calibration time on CI (see src/core/bench.rs).
-# From the windows-latest "Speed" job, 2026-11-24 (calibration ~60 ms).
-jpeg_full = 3.534
-jpeg_screen = 4.782
-downscale = 1.310
+# From the windows-latest "Speed" job, 2026-11-25: libjpeg-turbo 3.1.0
+# built with clang-cl (previous zune-jpeg ratios: full 3.77, screen 5.19).
+jpeg_full = 3.471
+jpeg_screen = 3.491
+jpeg_screen_full = 4.822
+downscale = 1.343
