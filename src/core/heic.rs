@@ -116,7 +116,7 @@ mod tests {
         ) {
             // A Windows with the HEIF and HEVC extensions.
             Ok(d) => assert_eq!((d.width, d.height), (48, 64)),
-            Err(e) => assert!(e.contains("HEIC"), "{e}"),
+            Err(e) => assert!(e.contains("HEIC needs"), "{e}"),
         }
     }
 }

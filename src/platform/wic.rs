@@ -18,7 +18,9 @@ const MAX_PIXELS: u64 = 1 << 28;
 #[cfg(windows)]
 pub fn decode(bytes: &[u8]) -> Result<(Vec<u8>, [usize; 2]), String> {
     use windows::core::IUnknown;
-    use windows::Win32::Foundation::WINCODEC_ERR_COMPONENTNOTFOUND;
+    use windows::Win32::Foundation::{
+        WINCODEC_ERR_COMPONENTINITIALIZEFAILURE, WINCODEC_ERR_COMPONENTNOTFOUND,
+    };
     use windows::Win32::Graphics::Imaging::{
         CLSID_WICImagingFactory, GUID_WICPixelFormat32bppRGBA, IWICImagingFactory, IWICPalette,
         WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand,
@@ -38,7 +40,11 @@ pub fn decode(bytes: &[u8]) -> Result<(Vec<u8>, [usize; 2]), String> {
     }
     COM.with(|_| {});
     let err = |e: windows::core::Error| {
-        if e.code() == WINCODEC_ERR_COMPONENTNOTFOUND {
+        // No HEIF decoder, or one without its HEVC codec (seen on Windows
+        // Server: "component initialization has failed").
+        if e.code() == WINCODEC_ERR_COMPONENTNOTFOUND
+            || e.code() == WINCODEC_ERR_COMPONENTINITIALIZEFAILURE
+        {
             MISSING_CODEC.to_string()
         } else {
             format!("Windows could not decode this file ({e})")
