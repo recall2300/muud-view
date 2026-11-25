@@ -15,7 +15,8 @@ use super::loader::{Decoded, Job, Loader, Quality};
 
 /// How many files ahead (in the direction of travel) are read into memory.
 pub const READ_AHEAD: usize = 10;
-/// Memory for kept full-resolution pixels (about four 32.5 MP photos).
+/// Default memory for kept full-resolution pixels (about four 32.5 MP
+/// photos); the app sets it from the RAM installed ([`super::memory`]).
 pub const FULL_BUDGET: usize = 640 * 1024 * 1024;
 
 pub enum Slot {
@@ -61,6 +62,7 @@ pub struct Library {
     cache: HashMap<PathBuf, Slot>,
     lru: VecDeque<PathBuf>,
     budget: usize,
+    full_budget: usize,
     /// Full-resolution pixels of the current image and those ahead.
     fulls: Vec<(PathBuf, Arc<Decoded>)>,
     /// The image the view wants drawn at full resolution (zoomed in).
@@ -84,6 +86,7 @@ impl Library {
             cache: HashMap::new(),
             lru: VecDeque::new(),
             budget,
+            full_budget: FULL_BUDGET,
             fulls: Vec::new(),
             want_full: None,
             rapid: false,
@@ -91,6 +94,16 @@ impl Library {
             idle: false,
             loader,
         }
+    }
+
+    /// Memory for kept full-resolution pixels.
+    pub fn with_full_budget(mut self, bytes: usize) -> Self {
+        self.full_budget = bytes;
+        self
+    }
+
+    pub fn budgets(&self) -> (usize, usize) {
+        (self.budget, self.full_budget)
     }
 
     pub fn loader(&self) -> &Loader {
@@ -179,10 +192,11 @@ impl Library {
         self.fulls.sort_by_key(|(p, _)| rank(p));
         let mut total = 0;
         let want = self.want_full.clone();
+        let budget = self.full_budget;
         self.fulls.retain(|(p, d)| {
             total += d.bytes();
             // The one being looked at stays whatever the budget says.
-            total <= FULL_BUDGET || want.as_ref() == Some(p)
+            total <= budget || want.as_ref() == Some(p)
         });
     }
 

@@ -93,13 +93,19 @@ impl MuudApp {
             _ => "none".into(),
         };
         let loader = self.lib.loader();
+        let (screen_budget, full_budget) = self.lib.budgets();
+        let ram = crate::core::memory::installed_ram()
+            .map_or("unknown".into(), |b| crate::core::memory::human(b as usize));
         let pipeline = format!(
-            "{} decoders, texture limit {}, {} files read ahead, full-res current: {}, key held: {}",
+            "{} decoders, texture limit {}, {} files read ahead, full-res current: {}, key held: {}\nMemory: {ram} RAM; caches {} screen-size, {} full-res, {} read-ahead",
             loader.decoders(),
             loader.max_texture_side(),
             loader.read_cache_len(),
             self.lib.current().is_some_and(|p| self.lib.has_full(p)),
             self.lib.is_rapid(),
+            crate::core::memory::human(screen_budget),
+            crate::core::memory::human(full_budget),
+            crate::core::memory::human(loader.read_budget()),
         );
         format!(
             "muud view {VERSION}\nOS: {} {}\nCPU threads: {}\nGPU max texture: {max_tex}\nScale: {ppp:.2}\nPipeline: {pipeline}\nData folder: {}\nPortable: {}\nRegistered: {}\nCurrent: {current}\n\n--- log (last 30 lines) ---\n{}",

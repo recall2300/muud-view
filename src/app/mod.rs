@@ -20,7 +20,6 @@ use crate::core::view::{View, ZoomMode};
 use crate::ui::bottom_bar::{BarState, Edge};
 use crate::ui::theme::{apply_style, ink, install_fonts, paper, set_dark, CANVAS_GRAY, CANVAS_INK};
 
-pub const CACHE_BUDGET: usize = 1024 * 1024 * 1024;
 pub const TOP_BAR: f32 = 40.0;
 pub const BOTTOM_BAR: f32 = 48.0;
 pub const INFO_W: f32 = 340.0;
@@ -199,6 +198,8 @@ impl MuudApp {
             .map(|n| n.get())
             .unwrap_or(4)
             .clamp(2, 16);
+        let budgets = crate::core::memory::budgets();
+        crate::core::log::info(&format!("memory budgets: {budgets:?}"));
         let screenshot = std::env::var_os("MUUD_SCREENSHOT").map(|p| ScreenshotJob {
             path: PathBuf::from(p),
             frames: 0,
@@ -207,7 +208,11 @@ impl MuudApp {
         });
         Self {
             settings,
-            lib: Library::new(Loader::new(cc.egui_ctx.clone(), threads), CACHE_BUDGET),
+            lib: Library::new(
+                Loader::with_read_budget(cc.egui_ctx.clone(), threads, budgets.read),
+                budgets.screen,
+            )
+            .with_full_budget(budgets.full),
             textures: HashMap::new(),
             shown: None,
             view: start_view,

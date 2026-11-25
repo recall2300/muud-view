@@ -14,6 +14,7 @@ pub mod keymap;
 pub mod library;
 pub mod loader;
 pub mod log;
+pub mod memory;
 pub mod photo_folders;
 pub mod pixel;
 pub mod reading;

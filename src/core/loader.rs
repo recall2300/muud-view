@@ -27,7 +27,9 @@ pub use super::decode::{DecodeOpts, Decoded};
 
 pub type LoadResult = Result<Arc<Decoded>, String>;
 
-/// Raw file bytes kept in memory ahead of decoding.
+/// Raw file bytes kept in memory ahead of decoding, in tests; the app sizes
+/// it from the RAM installed ([`super::memory`]).
+#[cfg(test)]
 pub const READ_BUDGET: usize = 512 * 1024 * 1024;
 /// Files read at the same time. On a NAS most of a read is waiting for the
 /// network, so two in flight nearly double the read-ahead speed.
@@ -185,14 +187,20 @@ pub struct Loader {
 }
 
 impl Loader {
+    #[cfg(test)]
     pub fn new(ctx: egui::Context, threads: usize) -> Self {
+        Self::with_read_budget(ctx, threads, READ_BUDGET)
+    }
+
+    /// With at most `read_budget` bytes of files read ahead.
+    pub fn with_read_budget(ctx: egui::Context, threads: usize, read_budget: usize) -> Self {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 jobs: VecDeque::new(),
                 in_flight: HashSet::new(),
                 reads: Vec::new(),
                 reading: HashSet::new(),
-                bytes: ByteCache::new(READ_BUDGET),
+                bytes: ByteCache::new(read_budget),
                 shutdown: false,
             }),
             wake: Condvar::new(),
@@ -279,6 +287,10 @@ impl Loader {
     }
 
     /// Files whose bytes are in memory (for diagnostics).
+    pub fn read_budget(&self) -> usize {
+        self.shared.state.lock().unwrap().bytes.budget
+    }
+
     pub fn read_cache_len(&self) -> usize {
         self.shared.state.lock().unwrap().bytes.map.len()
     }
