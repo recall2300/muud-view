@@ -79,7 +79,16 @@ jobs:
 
       - name: License policy
         run: cargo deny check licenses bans sources
-      - run: cargo test --release --locked
+      # A failing test is also reported as an annotation on the run
+      # (readable without signing in).
+      - name: Tests
+        shell: bash
+        run: |
+          set -o pipefail
+          if ! cargo test --release --locked 2>&1 | tee test.log; then
+            grep -E -A2 "panicked at|^test .* FAILED$" test.log | head -40 | sed 's/^/::error title=test failed::/'
+            exit 1
+          fi
       - run: cargo build --release --locked
 
       - name: Third-party notices

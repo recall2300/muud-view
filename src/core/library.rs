@@ -2,9 +2,10 @@
 //! prefetching. No UI code here, so it is tested directly.
 //!
 //! Images are cached at screen size ([`Quality::Screen`]). The current image
-//! and the next one also keep the full-resolution pixels their decode made
-//! on the way (no extra work), so zooming in needs no second decode; the
-//! full pixels are drawn only while the view needs them.
+//! and the ones ahead of it also keep the full-resolution pixels their
+//! decode made on the way (no extra work, within [`FULL_BUDGET`]), so
+//! zooming in needs no second decode; the full pixels are drawn only while
+//! the view needs them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -14,6 +15,8 @@ use super::loader::{Decoded, Job, Loader, Quality};
 
 /// How many files ahead (in the direction of travel) are read into memory.
 pub const READ_AHEAD: usize = 10;
+/// Memory for kept full-resolution pixels (about four 32.5 MP photos).
+pub const FULL_BUDGET: usize = 640 * 1024 * 1024;
 
 pub enum Slot {
     Ready(Arc<Decoded>),
@@ -58,7 +61,7 @@ pub struct Library {
     cache: HashMap<PathBuf, Slot>,
     lru: VecDeque<PathBuf>,
     budget: usize,
-    /// Full-resolution pixels of the current and the next image.
+    /// Full-resolution pixels of the current image and those ahead.
     fulls: Vec<(PathBuf, Arc<Decoded>)>,
     /// The image the view wants drawn at full resolution (zoomed in).
     want_full: Option<PathBuf>,
@@ -156,13 +159,31 @@ impl Library {
         self.fulls.iter().find(|(p, _)| p == path).map(|(_, d)| d)
     }
 
-    /// The images whose full pixels are kept: the current one and the next
-    /// in the direction of travel.
+    /// The images whose full pixels are kept, nearest first: the current one
+    /// and the three ahead in the direction of travel. New images are
+    /// decoded three ahead, so they must keep their pixels from there on to
+    /// still have them when they become current.
     fn keep_full(&self) -> Vec<PathBuf> {
         if self.files.is_empty() {
             return Vec::new();
         }
-        self.around(&[0, 1])
+        self.around(&[0, 1, 2, 3])
+    }
+
+    /// Drops kept full pixels that are no longer ahead, then the farthest
+    /// ones until they fit the budget.
+    fn prune_fulls(&mut self) {
+        let keep = self.keep_full();
+        self.fulls.retain(|(p, _)| keep.contains(p));
+        let rank = |p: &PathBuf| keep.iter().position(|k| k == p).unwrap_or(usize::MAX);
+        self.fulls.sort_by_key(|(p, _)| rank(p));
+        let mut total = 0;
+        let want = self.want_full.clone();
+        self.fulls.retain(|(p, d)| {
+            total += d.bytes();
+            // The one being looked at stays whatever the budget says.
+            total <= FULL_BUDGET || want.as_ref() == Some(p)
+        });
     }
 
     pub fn current_decoded(&self) -> Option<&Arc<Decoded>> {
@@ -328,10 +349,9 @@ impl Library {
         self.want_full.as_deref() == Some(path) && self.full_of(path).is_some()
     }
 
-    /// Frees full pixels of images that are no longer current or next.
+    /// Frees full pixels of images that are no longer current or ahead.
     fn drop_full_unless_current(&mut self) {
-        let keep = self.keep_full();
-        self.fulls.retain(|(p, _)| keep.contains(p));
+        self.prune_fulls();
         let cur = self.current().cloned();
         if self.want_full != cur {
             self.want_full = None;
@@ -354,6 +374,7 @@ impl Library {
                     if wanted || self.keep_full().contains(&done.path) {
                         self.fulls.retain(|(p, _)| p != &done.path);
                         self.fulls.push((done.path, d));
+                        self.prune_fulls();
                     }
                 }
                 (Quality::Full, Err(e)) => {
@@ -611,6 +632,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn lib_with(n: usize) -> (Library, PathBuf) {
+        lib_with_screen(n, None)
+    }
+
+    /// With a screen size set before any decoding starts.
+    fn lib_with_screen(n: usize, screen: Option<[usize; 2]>) -> (Library, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "muud-lib-{}-{n}-{}",
             std::process::id(),
@@ -625,7 +651,11 @@ mod tests {
                 .unwrap();
             files.push(p);
         }
-        let mut lib = Library::new(Loader::new(eframe::egui::Context::default(), 2), 1 << 30);
+        let loader = Loader::new(eframe::egui::Context::default(), 2);
+        if let Some(size) = screen {
+            loader.set_screen_size(size);
+        }
+        let mut lib = Library::new(loader, 1 << 30);
         lib.set_files(files, 0);
         (lib, dir)
     }
@@ -903,23 +933,40 @@ mod tests {
 
     #[test]
     fn current_and_next_keep_full_pixels_for_instant_zoom() {
-        let (mut lib, dir) = lib_with(6);
-        lib.loader().set_screen_size([2, 2]); // everything is "reduced"
+        // Everything is "reduced" at this screen size; set before the first
+        // decode starts.
+        let (mut lib, dir) = lib_with_screen(6, Some([2, 2]));
         lib.go_to(1);
+        // Whatever finished already, the current and next image get their
+        // full pixels; unfinished ones are decoded with them.
         let jobs = lib.jobs();
-        // Current and next decode with their full pixels; the rest plain.
-        assert_eq!(jobs[0], Job::screen_full(lib.files[1].clone()));
-        assert!(jobs.contains(&Job::screen_full(lib.files[2].clone())));
-        assert!(jobs.contains(&Job::screen(lib.files[3].clone())));
+        for j in &jobs {
+            let keep = lib.keep_full();
+            let expected = if keep.contains(&j.path) {
+                Quality::ScreenFull
+            } else {
+                Quality::Screen
+            };
+            assert_eq!(j.quality, expected, "{:?}", j.path);
+        }
         let cur = lib.files[1].clone();
         let next = lib.files[2].clone();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while (lib.full_of(&cur).is_none() || lib.full_of(&next).is_none())
-            && Instant::now() < deadline
-        {
+        // Both results of each decode (full pixels arrive just before the
+        // screen-size image).
+        let done = |lib: &Library, p: &PathBuf| lib.full_of(p).is_some() && lib.get(p).is_some();
+        while (!done(&lib, &cur) || !done(&lib, &next)) && Instant::now() < deadline {
             lib.poll();
             std::thread::sleep(Duration::from_millis(5));
         }
+        // Browsing forward: the image decoded ahead still has its pixels
+        // when it becomes current.
+        let ahead = lib.files[3].clone();
+        while !done(&lib, &ahead) && Instant::now() < deadline {
+            lib.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(lib.full_of(&ahead).is_some());
         // Kept, but drawn at screen size until zoomed.
         assert_eq!(lib.best(&cur).unwrap().texture_size(), [2, 2]);
         assert!(!lib.request_full(), "no decode needed");
@@ -927,10 +974,11 @@ mod tests {
         assert_eq!(lib.best(&cur).unwrap().texture_size(), [4, 4]);
         lib.release_full();
         assert!(!lib.has_full(&cur));
-        // Moving on: the old current is freed, the next one is kept.
+        // Moving on: the old current is freed, the ones ahead are kept.
         lib.go_to(2);
         assert!(lib.full_of(&cur).is_none());
         assert!(lib.full_of(&next).is_some());
+        assert!(lib.full_of(&ahead).is_some());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
