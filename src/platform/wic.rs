@@ -89,7 +89,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Vec<u8>, [usize; 2]), String> {
 
 #[cfg(not(windows))]
 pub fn decode(_bytes: &[u8]) -> Result<(Vec<u8>, [usize; 2]), String> {
-    Err("HEIC files are decoded by Windows (HEIF and HEVC Video Extensions)".into())
+    Err("HEIC needs Windows and its HEIF and HEVC Video Extensions".into())
 }
 
 #[cfg(all(test, windows))]
