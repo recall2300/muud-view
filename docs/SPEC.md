@@ -18,7 +18,7 @@ notice; see `THIRD_PARTY_NOTICES.md` (generated at release time).
 1. **Instant** – the window appears immediately and the next/previous image is
    already decoded before you press the key.
 2. **Familiar** – the key bindings people already know from Korean image viewers.
-3. **Quiet** – no ads, no network access, no telemetry, a single portable `.exe`.
+3. **Quiet** – no ads, no telemetry, no network access except the update check the user asks for, a single portable `.exe`.
 4. **Spec-sheet design** – monochrome, bold grotesk headings, monospaced data,
    hairline borders, dotted rules, outlined pill tags.
 

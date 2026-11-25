@@ -19,7 +19,7 @@
 - **폴더 변경 반영** — 보는 중에 다른 프로그램이 파일을 추가·삭제·이름 변경하면 목록에 바로 반영합니다.
 - **익숙한 단축키** — 국내 이미지 뷰어에서 쓰던 키 그대로: `PgDn`/`Space` 다음, `Enter` 전체화면, `Tab` 정보, `Ctrl+R` 회전 …
 - **설치 없음** — `muud-view.exe` 하나. C 런타임까지 정적으로 넣어 VC++ 재배포 패키지도 필요 없습니다.
-- **네트워크 0** — 통신 코드가 아예 없습니다. 광고·업데이트 확인·텔레메트리 없음.
+- **조용함** — 광고·텔레메트리 없음. 통신은 직접 "업데이트 확인"을 눌렀을 때 GitHub Releases에 묻는 것뿐입니다(자동 확인 없음).
 - **스펙 시트 디자인** — 흑백, 굵은 그로테스크 제목, 고정폭 데이터, 헤어라인과 점선.
 
 지원 포맷: JPEG · JPEG XL(애니메이션) · AVIF · HEIC(Windows 코덱) · PNG · GIF(애니메이션) · WebP(애니메이션) · BMP · TIFF · TGA · ICO · PNM · QOI · DDS · HDR · EXR
@@ -29,7 +29,8 @@
 1. [Releases](https://github.com/recall2300/muud-view/releases)에서 `muud-view-vX.Y.Z-windows-x64.zip`을 받아 원하는 폴더에 풉니다.
 2. `muud-view.exe`를 실행하거나, 이미지를 창에 끌어다 놓습니다.
 3. 기본 뷰어로 쓰려면: muud view에서 `F5` → `1 SET AS IMAGE VIEWER` → 열리는 Windows 기본 앱 화면에서 muud view 선택.
-   우클릭 메뉴("muud view로 열기", "muud view로 폴더 보기")도 함께 등록되고, `F5` → `3`으로 모두 지울 수 있습니다.
+   우클릭 메뉴("muud view로 열기", "muud view로 폴더 보기")와 포맷별 파일 아이콘도 함께 등록되고, `F5` → `3`으로 모두 지울 수 있습니다.
+4. 새 버전으로 바꾸려면: `F5` → Windows 탭 → `6 업데이트 확인` → 새 버전이 있으면 한 번 더 눌러 설치(내려받은 파일의 SHA-256을 릴리스의 체크섬과 맞춰 봄) → 한 번 더 눌러 다시 시작. Scoop·winget으로 설치했다면 그쪽 명령으로 업데이트합니다.
    관리자 권한은 필요 없습니다. 스크립트로는 `muud-view.exe --register` / `--unregister`.
 4. 창이 열려 있을 때 다른 사진을 열면 새 창 대신 기존 창에서 열립니다.
 5. USB나 공용 PC에서 쓰려면 exe 옆에 `portable`이라는 빈 파일을 만드세요. 설정과 로그가 exe 옆 `muud-view-data` 폴더에 저장됩니다.

@@ -726,10 +726,15 @@ impl MuudApp {
                 mono_medium(12.5),
                 fg,
             );
+            let text = if *action == crate::ui::setup::SetupAction::CheckUpdates {
+                self.update_label()
+            } else {
+                tr(label).to_string()
+            };
             p.text(
                 pos2(row.left() + 58.0, row.center().y),
                 Align2::LEFT_CENTER,
-                tr(label),
+                text,
                 mono(12.5),
                 fg,
             );

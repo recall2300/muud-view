@@ -29,6 +29,22 @@ fn main() -> eframe::Result {
             std::process::exit(if r.is_ok() { 0 } else { 1 });
         }
     }
+    // Started by an in-app update: let the old version close first (it
+    // holds the single-instance pipe), then remove its file.
+    if args.first().and_then(|a| a.to_str()) == Some("--after-update") {
+        let pid = args
+            .get(1)
+            .and_then(|a| a.to_str())
+            .and_then(|s| s.parse().ok());
+        args.drain(..args.len().min(2));
+        if let Some(pid) = pid {
+            platform::wait_for_exit(pid, std::time::Duration::from_secs(15));
+        }
+        core::log::info("started after an update");
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        core::update::clean_up(&exe);
+    }
     let initial = (!args.is_empty()).then(|| PathBuf::from(args.remove(0)));
     let initial = initial.map(|p| std::fs::canonicalize(&p).unwrap_or(p));
 

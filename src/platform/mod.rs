@@ -3,6 +3,7 @@
 pub mod clipboard;
 pub mod drag;
 pub mod file_types;
+pub mod http;
 pub mod integration;
 pub mod single_instance;
 pub mod wic;
@@ -120,22 +121,6 @@ pub fn shell_verb(path: &Path, verb: &str) -> Result<(), String> {
     }
 }
 
-/// Opens a web page in the default browser.
-pub fn open_url(url: &str) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        shell_verb(Path::new(url), "open")
-    }
-    #[cfg(not(windows))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
-}
-
 /// Makes `path` (a JPEG/PNG/BMP) the desktop wallpaper.
 pub fn set_wallpaper(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
@@ -216,4 +201,29 @@ pub fn pictures_dir() -> Option<PathBuf> {
     std::env::var_os("XDG_PICTURES_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Pictures")))
+}
+
+/// Waits (up to `limit`) for process `pid` to end.
+#[cfg(windows)]
+pub fn wait_for_exit(pid: u32, limit: std::time::Duration) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+    // SAFETY: a handle we open and close here; a gone process gives null.
+    unsafe {
+        let h = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !h.is_null() {
+            WaitForSingleObject(h, limit.as_millis().min(u32::MAX as u128) as u32);
+            CloseHandle(h);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn wait_for_exit(pid: u32, limit: std::time::Duration) {
+    let start = std::time::Instant::now();
+    while std::path::Path::new(&format!("/proc/{pid}")).exists() && start.elapsed() < limit {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }

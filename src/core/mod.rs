@@ -26,5 +26,6 @@ pub mod settings;
 pub mod share;
 pub mod stars;
 pub mod thumbs;
+pub mod update;
 pub mod view;
 pub mod watch;

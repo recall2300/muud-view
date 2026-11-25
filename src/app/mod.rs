@@ -94,6 +94,8 @@ pub struct MuudApp {
     pub(crate) history: crate::core::history::History,
     /// Messages from background jobs (e.g. clipboard writes), shown as toasts.
     pub(crate) jobs: Vec<std::sync::mpsc::Receiver<String>>,
+    /// In-app update: where it stands (F5 → Windows → 6).
+    pub(crate) update: crate::ui::setup::UpdateState,
     pub(crate) paste_count: u32,
     pub(crate) show_settings: bool,
     pub(crate) settings_tab: crate::ui::settings_window::Tab,
@@ -236,6 +238,7 @@ impl MuudApp {
             bars: BarState::default(),
             history: Default::default(),
             jobs: Vec::new(),
+            update: crate::ui::setup::UpdateState::Idle,
             paste_count: 0,
             show_settings,
             settings_tab,
@@ -399,6 +402,7 @@ impl eframe::App for MuudApp {
         self.update_screen_size(&ctx);
         self.lib.poll();
         self.poll_jobs();
+        self.poll_update(&ctx);
         self.poll_watcher();
         self.check_compare();
         // The grid shows thumbnails; the big images wait until it closes.
