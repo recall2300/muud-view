@@ -113,6 +113,8 @@ struct Props {
     /// Mirror axis after rotation: 0 = left-right, 1 = top-bottom.
     mirror: Option<u8>,
     alpha_urn: bool,
+    /// Clean aperture (`clap`): the shown size when smaller than `ispe`.
+    clean: Option<[u32; 2]>,
 }
 
 #[derive(Debug, Clone)]
@@ -287,6 +289,15 @@ fn apply_property(p: &mut Props, kind: &[u8; 4], body: &[u8]) {
             _ => {}
         },
         b"irot" => p.rotation = r.u8().unwrap_or(0) & 3,
+        b"clap" => {
+            let mut frac = || -> Option<u32> {
+                let (n, d) = (r.u32()?, r.u32()?);
+                (d != 0).then(|| ((n as f64 / d as f64).round()) as u32)
+            };
+            if let (Some(w), Some(h)) = (frac(), frac()) {
+                p.clean = Some([w, h]);
+            }
+        }
         b"imir" => p.mirror = r.u8().map(|a| a & 1),
         b"auxC" => {
             r.full();
@@ -779,6 +790,61 @@ fn icc_for(props: &Props, colour: Nclx) -> Option<Vec<u8>> {
     profile.encode().ok()
 }
 
+/// The Exif item describing image `id`: a TIFF block after a 4-byte offset.
+fn exif_of(meta: &Meta, bytes: &[u8], id: u32) -> Option<super::exif_info::ExifInfo> {
+    meta.referring(b"cdsc", id)
+        .filter_map(|id| meta.item(id).ok())
+        .find(|i| &i.kind == b"Exif")
+        .and_then(|i| meta.data(bytes, i).ok())
+        .and_then(|d| {
+            let off = u32::from_be_bytes(d.get(..4)?.try_into().ok()?) as usize;
+            d.get(4 + off..).map(<[u8]>::to_vec)
+        })
+        .and_then(super::exif_info::read_tiff)
+        .filter(|e| !e.is_empty())
+}
+
+/// What a HEIF file (HEIC too) says about its main picture, beside the
+/// pixels: for decoders that only give pixels (Windows' HEIC codec).
+pub struct HeifInfo {
+    pub orientation: Orientation,
+    /// Stored size (`clap`, else `ispe`), before rotation.
+    pub size: Option<[u32; 2]>,
+    /// Colour profile when not sRGB: the file's ICC, or one made from CICP.
+    pub icc: Option<Vec<u8>>,
+    pub exif: Option<super::exif_info::ExifInfo>,
+}
+
+pub fn heif_info(bytes: &[u8]) -> Result<HeifInfo, String> {
+    let meta = parse(bytes)?;
+    let primary = meta.item(meta.primary)?;
+    let first_tile = meta.referenced(b"dimg", primary.id).first().copied();
+    let tile = first_tile.and_then(|t| meta.item(t).ok());
+    let mut props = primary.props.clone();
+    if props.icc.is_none() && props.nclx.is_none() {
+        if let Some(t) = tile {
+            props.icc = t.props.icc.clone();
+            props.nclx = t.props.nclx;
+        }
+    }
+    Ok(HeifInfo {
+        orientation: orientation(&primary.props),
+        size: primary.props.clean.or(primary.props.size),
+        icc: icc_for(&props, props.nclx.unwrap_or_default()),
+        exif: exif_of(&meta, bytes, primary.id),
+    })
+}
+
+/// HEIF brands whose pictures are HEVC (HEIC): decoded by Windows.
+pub fn is_heic(bytes: &[u8]) -> bool {
+    let Some((b"ftyp", body)) = boxes(bytes).next() else {
+        return false;
+    };
+    body.chunks_exact(4).enumerate().any(|(i, b)| {
+        i != 1 && matches!(b, b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis")
+    }) && !is_avif(bytes)
+}
+
 pub fn decode(bytes: &[u8], opts: DecodeOpts) -> Result<Decoded, String> {
     let meta = parse(bytes)?;
     let primary = meta.item(meta.primary)?.clone();
@@ -807,17 +873,7 @@ pub fn decode(bytes: &[u8], opts: DecodeOpts) -> Result<Decoded, String> {
         }
     }
 
-    let exif = meta
-        .referring(b"cdsc", primary.id)
-        .filter_map(|id| meta.item(id).ok())
-        .find(|i| &i.kind == b"Exif")
-        .and_then(|i| meta.data(bytes, i).ok())
-        .and_then(|d| {
-            let off = u32::from_be_bytes(d.get(..4)?.try_into().ok()?) as usize;
-            d.get(4 + off..).map(<[u8]>::to_vec)
-        })
-        .and_then(super::exif_info::read_tiff)
-        .filter(|e| !e.is_empty());
+    let exif = exif_of(&meta, bytes, primary.id);
 
     let o = orientation(&primary.props);
     let icc = if opts.color {

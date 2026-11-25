@@ -22,7 +22,7 @@
 - **네트워크 0** — 통신 코드가 아예 없습니다. 광고·업데이트 확인·텔레메트리 없음.
 - **스펙 시트 디자인** — 흑백, 굵은 그로테스크 제목, 고정폭 데이터, 헤어라인과 점선.
 
-지원 포맷: JPEG · JPEG XL(애니메이션) · AVIF · PNG · GIF(애니메이션) · WebP(애니메이션) · BMP · TIFF · TGA · ICO · PNM · QOI · DDS · HDR · EXR
+지원 포맷: JPEG · JPEG XL(애니메이션) · AVIF · HEIC(Windows 코덱) · PNG · GIF(애니메이션) · WebP(애니메이션) · BMP · TIFF · TGA · ICO · PNM · QOI · DDS · HDR · EXR
 
 ## 설치
 

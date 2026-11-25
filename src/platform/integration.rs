@@ -10,16 +10,26 @@
 // The registry plan is only executed on Windows but is tested everywhere.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-pub const PROG_ID: &str = "muudview.image";
+/// The one ProgID of versions before 0.8 (now the generic image type's).
+pub const LEGACY_PROG_ID: &str = "muudview.image";
 pub const APP_NAME: &str = "muud view";
 const APP_KEY: &str = r"Software\muud-view";
 const CAPABILITIES: &str = r"Software\muud-view\Capabilities";
 
-/// Extensions registered for "Open with" and default-app selection.
-pub const EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "jfif", "png", "gif", "webp", "bmp", "tif", "tiff", "tga", "ico", "qoi", "dds",
-    "hdr", "exr", "jxl", "avif",
-];
+pub use super::file_types::{FileType, FILE_TYPES};
+
+/// The ProgID of a file type (`muudview.jpg`, ...). The generic "image"
+/// type keeps the ProgID earlier versions used for everything.
+pub fn prog_id(t: &FileType) -> String {
+    format!("muudview.{}", t.icon)
+}
+
+/// Every extension registered for "Open with" and default-app selection.
+pub fn extensions() -> impl Iterator<Item = (&'static str, &'static FileType)> {
+    FILE_TYPES
+        .iter()
+        .flat_map(|t| t.extensions.iter().map(move |e| (*e, t)))
+}
 
 /// One registry write under HKEY_CURRENT_USER. `name: None` is the default value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,24 +52,32 @@ pub fn plan(exe: &str) -> Vec<RegValue> {
     let open = format!("\"{exe}\" \"%1\"");
     let icon = format!("\"{exe}\",0");
     let classes = r"Software\Classes";
-    let mut out = vec![
-        // The file type muud view handles.
-        v(format!(r"{classes}\{PROG_ID}"), None, "Image (muud view)"),
-        v(
-            format!(r"{classes}\{PROG_ID}\DefaultIcon"),
+    let mut out = Vec::new();
+    // One file type per format, each with its own Explorer icon.
+    for t in FILE_TYPES {
+        let id = prog_id(t);
+        out.push(v(
+            format!(r"{classes}\{id}"),
             None,
-            icon.clone(),
-        ),
-        v(
-            format!(r"{classes}\{PROG_ID}\shell\open"),
+            format!("{} (muud view)", t.name),
+        ));
+        out.push(v(
+            format!(r"{classes}\{id}\DefaultIcon"),
+            None,
+            format!("\"{exe}\",-{}", t.icon_id),
+        ));
+        out.push(v(
+            format!(r"{classes}\{id}\shell\open"),
             Some("FriendlyAppName"),
             APP_NAME,
-        ),
-        v(
-            format!(r"{classes}\{PROG_ID}\shell\open\command"),
+        ));
+        out.push(v(
+            format!(r"{classes}\{id}\shell\open\command"),
             None,
             open.clone(),
-        ),
+        ));
+    }
+    out.extend([
         // "Open with" → muud view.
         v(
             format!(r"{classes}\Applications\muud-view.exe"),
@@ -131,11 +149,12 @@ pub fn plan(exe: &str) -> Vec<RegValue> {
             None,
             format!("\"{exe}\" \"%V\""),
         ),
-    ];
-    for ext in EXTENSIONS {
+    ]);
+    for (ext, t) in extensions() {
+        let id = prog_id(t);
         out.push(v(
             format!(r"{classes}\.{ext}\OpenWithProgids"),
-            Some(PROG_ID),
+            Some(&id),
             "",
         ));
         out.push(v(
@@ -146,7 +165,7 @@ pub fn plan(exe: &str) -> Vec<RegValue> {
         out.push(v(
             format!(r"{CAPABILITIES}\FileAssociations"),
             Some(&format!(".{ext}")),
-            PROG_ID,
+            id,
         ));
     }
     out
@@ -155,14 +174,18 @@ pub fn plan(exe: &str) -> Vec<RegValue> {
 /// Keys `unregister` deletes entirely.
 pub fn owned_trees() -> Vec<String> {
     let classes = r"Software\Classes";
-    vec![
-        format!(r"{classes}\{PROG_ID}"),
+    let mut out: Vec<String> = FILE_TYPES
+        .iter()
+        .map(|t| format!(r"{classes}\{}", prog_id(t)))
+        .collect();
+    out.extend([
         format!(r"{classes}\Applications\muud-view.exe"),
         format!(r"{classes}\SystemFileAssociations\image\shell\muudview"),
         format!(r"{classes}\Directory\shell\muudview"),
         format!(r"{classes}\Directory\Background\shell\muudview"),
         APP_KEY.to_string(),
-    ]
+    ]);
+    out
 }
 
 /// Single values `unregister` removes from keys shared with other programs.
@@ -171,13 +194,29 @@ pub fn shared_values() -> Vec<(String, String)> {
         r"Software\RegisteredApplications".to_string(),
         APP_NAME.to_string(),
     )];
-    for ext in EXTENSIONS {
+    for (ext, t) in extensions() {
         out.push((
             format!(r"Software\Classes\.{ext}\OpenWithProgids"),
-            PROG_ID.to_string(),
+            prog_id(t),
         ));
     }
+    out.extend(stale_values());
     out
+}
+
+/// What versions before per-format icons wrote that the current layout no
+/// longer uses: every extension pointed at one ProgID, `muudview.image`.
+/// Removed when registering, so "Open with" does not list muud view twice.
+pub fn stale_values() -> Vec<(String, String)> {
+    extensions()
+        .filter(|(_, t)| prog_id(t) != LEGACY_PROG_ID)
+        .map(|(ext, _)| {
+            (
+                format!(r"Software\Classes\.{ext}\OpenWithProgids"),
+                LEGACY_PROG_ID.to_string(),
+            )
+        })
+        .collect()
 }
 
 pub const DEFAULT_APPS_URI: &str = "ms-settings:defaultapps?registeredAppUser=muud%20view";
@@ -246,6 +285,13 @@ mod imp {
 
     pub fn register() -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        // SAFETY: NUL-terminated strings; missing values are fine.
+        unsafe {
+            for (key, name) in stale_values() {
+                let (k, n) = (wide(&key), wide(&name));
+                RegDeleteKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), n.as_ptr());
+            }
+        }
         for value in plan(&exe.display().to_string()) {
             set(&value)?;
         }
@@ -379,22 +425,29 @@ mod tests {
     #[test]
     fn plan_covers_every_extension_and_menu() {
         let p = plan(r"C:\Tools\muud-view.exe");
-        for ext in EXTENSIONS {
+        for (ext, t) in extensions() {
+            let id = prog_id(t);
             assert!(p.iter().any(
                 |v| v.key == format!(r"Software\Classes\.{ext}\OpenWithProgids")
-                    && v.name.as_deref() == Some(PROG_ID)
+                    && v.name.as_deref() == Some(id.as_str())
             ));
             assert!(p
                 .iter()
                 .any(|v| v.key.ends_with(r"Capabilities\FileAssociations")
                     && v.name.as_deref() == Some(&format!(".{ext}"))
-                    && v.data == PROG_ID));
+                    && v.data == id));
         }
         let cmd = p
             .iter()
-            .find(|v| v.key == r"Software\Classes\muudview.image\shell\open\command")
+            .find(|v| v.key == r"Software\Classes\muudview.jpg\shell\open\command")
             .unwrap();
         assert_eq!(cmd.data, r#""C:\Tools\muud-view.exe" "%1""#);
+        // Each type shows its own icon from the exe.
+        let icon = p
+            .iter()
+            .find(|v| v.key == r"Software\Classes\muudview.avif\DefaultIcon")
+            .unwrap();
+        assert_eq!(icon.data, r#""C:\Tools\muud-view.exe",-105"#);
         assert!(p.iter().any(|v| v
             .key
             .contains(r"Directory\Background\shell\muudview\command")
@@ -417,6 +470,36 @@ mod tests {
                 "left behind: {value:?}"
             );
         }
+    }
+
+    #[test]
+    fn file_types_are_consistent() {
+        let mut ids = std::collections::HashSet::new();
+        let mut exts = std::collections::HashSet::new();
+        for t in FILE_TYPES {
+            assert!(ids.insert(t.icon_id), "icon id {} twice", t.icon_id);
+            let ico = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets/icons")
+                .join(format!("{}.ico", t.icon));
+            assert!(ico.exists(), "{}", ico.display());
+            for e in t.extensions {
+                assert!(exts.insert(*e), ".{e} in two types");
+                assert!(
+                    crate::core::folder::is_image(std::path::Path::new(&format!("a.{e}")))
+                        || *e == "cbz",
+                    ".{e} registered but not opened"
+                );
+            }
+        }
+        // The generic type keeps the old ProgID; old entries elsewhere go.
+        assert!(FILE_TYPES.iter().any(|t| prog_id(t) == LEGACY_PROG_ID));
+        let stale = stale_values();
+        assert!(stale
+            .iter()
+            .any(|(k, _)| k.ends_with(r".jpg\OpenWithProgids")));
+        assert!(!stale
+            .iter()
+            .any(|(k, _)| k.ends_with(r".bmp\OpenWithProgids")));
     }
 
     #[test]

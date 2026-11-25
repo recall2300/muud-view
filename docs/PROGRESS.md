@@ -21,9 +21,25 @@
 | 배포·운영 | ✅ 업데이트 확인, 이슈 템플릿, winget·scoop 매니페스트, SignPath 검토 |
 | 성능 개선 (v0.6.1) | ✅ 검토한 7곳 — v0.6.1 자동 릴리스 |
 | libjpeg-turbo 전환 | ✅ v0.6.2 자동 릴리스 |
+| v0.8 | 🔧 HEIC · 확장자별 아이콘 · 앱 안 업데이트 |
 | 검토 2차 (v0.7) | ✅ 크래시 방지 · ✅ 깨진 파일 테스트 · ✅ 메모리 한도 · ✅ JPEG XL · ✅ 코드 정리 · ✅ AVIF — v0.7.0 자동 릴리스 |
 
 ---
+
+## 2026-11-25 — HEIC (Windows 코덱) · 확장자별 파일 아이콘
+
+**HEIC**
+- 픽셀은 WIC(`platform/wic.rs`, `windows` 크레이트 — `trash`가 이미 쓰던 0.62)로 사용자 PC의 "HEIF 이미지 확장"+"HEVC 비디오 확장" 코덱이 디코딩. 코덱이 없으면 "HEIC needs the HEIF Image Extensions and HEVC Video Extensions (Microsoft Store)"
+- HEIC도 AVIF와 같은 HEIF 컨테이너라, 회전(irot·imir)·색 프로필(아이폰 Display P3 ICC)·Exif는 AVIF 때 만든 파서(`avif::heif_info`)로 읽음. 새로 `clap`(실제 보이는 크기 — libheif로 만든 64×48 HEIC는 저장 크기가 64×64) 읽기
+- WIC가 이미 돌린 픽셀을 주는 경우(가로세로가 저장 크기와 뒤바뀜)는 다시 돌리지 않게
+- 테스트: libheif로 만든 회전 HEIC의 컨테이너(방향·크기·Exif), 돌아가지 않은 픽셀이 왔을 때의 결과, WIC 경로는 Windows CI에서 PNG로(코덱 없이도 있는 것). 실제 HEIC 디코딩은 코덱이 있는 PC에서만 → 체크리스트
+
+**확장자별 아이콘**
+- `packaging/icons/make_icons.py`가 13종(JPG·PNG·GIF·WEBP·AVIF·JXL·HEIC·TIFF·RAW·PSD·SVG·CBZ·기타)을 그림: 앱 아이콘처럼 흑백에 "m"과 점선, 아래 띠에 포맷 이름(색으로도 구분). 16·24px에서는 글자 대신 띠 색만. `assets/icons/*.ico`(10가지 크기)
+- exe에 리소스로 넣음(build.rs, id 101~113). 목록은 `platform/file_types.rs` 하나 — 앱과 build.rs가 같이 씀(`include!`)
+- 레지스트리: 포맷마다 ProgID(`muudview.jpg` …)와 `DefaultIcon = "exe",-101`. 기본 앱으로 고르면 탐색기에 포맷별 아이콘. 예전 버전이 모든 확장자에 쓴 `muudview.image`는 기타 포맷용으로 남기고, 다른 확장자에서는 등록할 때 지움("연결 프로그램"에 두 번 나오지 않게)
+- 새로 등록하는 확장자: heic·heif, psd, svg, cbz, RAW 12종(cr2·cr3·nef·arw·dng 등)
+- 테스트: 아이콘 파일 존재·id 중복 없음·확장자가 두 포맷에 겹치지 않음·등록한 확장자는 실제로 열림, 등록 해제가 등록한 것을 모두 지움
 
 ## 2026-11-25 — AVIF 지원 (rav1d + 직접 짠 컨테이너 파서)
 

@@ -2,8 +2,10 @@
 
 pub mod clipboard;
 pub mod drag;
+pub mod file_types;
 pub mod integration;
 pub mod single_instance;
+pub mod wic;
 
 use std::path::{Path, PathBuf};
 

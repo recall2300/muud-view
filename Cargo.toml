@@ -61,6 +61,9 @@ moxcms = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 rfd = "0.18"
+# COM interfaces for WIC (HEIC through Windows' own codecs); already in the
+# tree through `trash`.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Com",

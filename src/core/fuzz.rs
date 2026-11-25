@@ -143,6 +143,8 @@ pub(crate) fn seeds() -> Vec<(&'static str, Vec<u8>)> {
         ("alpha.avif", data("alpha.avif")),
         ("rot.avif", data("rot.avif")),
         ("grid.avif", super::avif::tests::grid_of(&data("photo.avif"))),
+        // Pixels need Windows' codec; the container is read everywhere.
+        ("rot.heic", data("rot.heic")),
     ]
 }
 
@@ -237,7 +239,8 @@ fn broken_files_never_hang_or_take_the_app_down() {
     for (name, good) in seeds() {
         // The good file itself decodes (so the broken ones test something).
         let ok = decode_unguarded(&good, Path::new(name), opts[0], &mut |_| {});
-        assert!(ok.is_ok(), "{name}: {:?}", ok.err());
+        let needs_codec = name.ends_with(".heic");
+        assert!(ok.is_ok() || needs_codec, "{name}: {:?}", ok.err());
         for (i, bad) in broken(&good, &mut rng).into_iter().enumerate() {
             let o = opts[i % 2];
             let t = Instant::now();

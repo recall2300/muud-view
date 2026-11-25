@@ -255,6 +255,9 @@ pub(crate) fn decode_unguarded(
     if super::avif::is_avif(bytes) {
         return super::avif::decode(bytes, opts);
     }
+    if super::heic::is_heic(bytes) {
+        return super::heic::decode(bytes, opts);
+    }
     if super::jxl::is_jxl(bytes) {
         return super::jxl::decode(bytes, path, opts, partial);
     }
