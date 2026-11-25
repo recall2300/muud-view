@@ -437,15 +437,16 @@ struct JpegPixels {
 }
 
 /// The scaling factor to decode a `size` JPEG at so it is still at least
-/// `target` (and never larger than needed): libjpeg-turbo shrinks by n/8 in
-/// the IDCT itself, much cheaper than decoding everything and shrinking.
+/// `target`: libjpeg-turbo shrinks in the IDCT itself, much cheaper than
+/// decoding everything and shrinking. Only 1/2, 1/4 and 1/8 — those have
+/// SIMD code; the other n/8 factors run plain C, which on Windows (MSVC)
+/// is slower than a full decode.
 pub fn scale_for(size: [usize; 2], target: [usize; 2]) -> turbojpeg::ScalingFactor {
-    turbojpeg::Decompressor::supported_scaling_factors()
+    use turbojpeg::ScalingFactor as F;
+    [F::ONE_EIGHTH, F::ONE_QUARTER, F::ONE_HALF]
         .into_iter()
-        .filter(|f| f.num() <= f.denom())
-        .filter(|f| f.scale(size[0]) >= target[0] && f.scale(size[1]) >= target[1])
-        .min_by(|a, b| (a.num() * b.denom()).cmp(&(b.num() * a.denom())))
-        .unwrap_or(turbojpeg::ScalingFactor::ONE)
+        .find(|f| f.scale(size[0]) >= target[0] && f.scale(size[1]) >= target[1])
+        .unwrap_or(F::ONE)
 }
 
 fn turbo_pixels(bytes: &[u8], opts: DecodeOpts, o: Orientation) -> Result<JpegPixels, String> {
@@ -1309,7 +1310,8 @@ mod tests {
     #[test]
     fn libjpeg_turbo_shrinks_while_decoding() {
         // Smallest n/8 that still covers the target.
-        assert_eq!(scale_for([6960, 4640], [2160, 1440]).to_string(), "3/8");
+        assert_eq!(scale_for([6960, 4640], [2160, 1440]).to_string(), "1/2");
+        assert_eq!(scale_for([6960, 4640], [1600, 1000]).to_string(), "1/4");
         assert_eq!(scale_for([6960, 4640], [870, 580]).to_string(), "1/8");
         assert_eq!(scale_for([6960, 4640], [6960, 4640]).to_string(), "1/1");
         let jpeg = synthetic_photo(1600, 1200);

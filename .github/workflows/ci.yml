@@ -44,11 +44,18 @@ jobs:
   speed:
     name: Speed (regression check)
     runs-on: windows-latest
+    # Experiment: libjpeg-turbo's C code compiled with clang-cl (LLVM, on
+    # the runner) instead of MSVC, through Ninja.
+    env:
+      CMAKE_GENERATOR: Ninja
+      CC_x86_64_pc_windows_msvc: clang-cl
+      CXX_x86_64_pc_windows_msvc: clang-cl
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       # NASM: libjpeg-turbo's SIMD code (the build fails without it).
       - uses: ilammy/setup-nasm@v1
+      - run: choco install ninja --no-progress -y
       # Decode times divided by a calibration loop, compared with
       # bench/baseline.txt; fails if more than 30% slower. Results appear
       # as annotations and in the run summary.
