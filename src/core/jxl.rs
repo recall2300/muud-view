@@ -258,12 +258,12 @@ mod tests {
 
 #[cfg(test)]
 mod timing {
-    /// `MUUD_JXL_BENCH=file.jxl cargo test --release jxl_timing -- --ignored --nocapture`
+    /// `MUUD_DECODE_BENCH=file.jxl cargo test --release decode_timing -- --ignored --nocapture`
     #[test]
     #[ignore]
-    fn jxl_timing() {
+    fn decode_timing() {
         use crate::core::decode::{decode_bytes, DecodeOpts};
-        let Some(p) = std::env::var_os("MUUD_JXL_BENCH") else {
+        let Some(p) = std::env::var_os("MUUD_DECODE_BENCH") else {
             return;
         };
         let b = std::fs::read(&p).unwrap();

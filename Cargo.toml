@@ -49,6 +49,9 @@ encoding_rs = "0.8"
 # SVG (Apache-2.0 OR MIT) and Photoshop composite images (MIT OR Apache-2.0).
 resvg = { version = "0.50", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 psd = "0.3"
+# AVIF: rav1d (BSD-2-Clause), the Rust port of dav1d; its x86 assembly
+# needs NASM, as libjpeg-turbo does. The container is read in core/avif.rs.
+rav1d = { version = "1.1", default-features = false, features = ["asm", "bitdepth_8", "bitdepth_16"] }
 # JPEG XL (MIT OR Apache-2.0), pure Rust; colours via moxcms, already used.
 jxl-oxide = { version = "0.12", default-features = false, features = ["rayon", "moxcms"] }
 # libjpeg-turbo (TurboJPEG API), built from source and linked statically.

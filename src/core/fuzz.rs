@@ -139,6 +139,10 @@ pub(crate) fn seeds() -> Vec<(&'static str, Vec<u8>)> {
         ("lossy.jxl", data("lossy.jxl")),
         ("alpha.jxl", data("alpha.jxl")),
         ("anim.jxl", data("anim.jxl")),
+        ("photo.avif", data("photo.avif")),
+        ("alpha.avif", data("alpha.avif")),
+        ("rot.avif", data("rot.avif")),
+        ("grid.avif", super::avif::tests::grid_of(&data("photo.avif"))),
     ]
 }
 
@@ -194,6 +198,27 @@ fn broken(good: &[u8], rng: &mut Rng) -> Vec<Vec<u8>> {
         out.push(b);
     }
     out
+}
+
+/// One case in its own process, for finding crashes that abort:
+/// `MUUD_FUZZ_ONE=name:index cargo test fuzz_one -- --ignored`.
+#[test]
+#[ignore]
+fn fuzz_one() {
+    let Ok(which) = std::env::var("MUUD_FUZZ_ONE") else {
+        return;
+    };
+    let (want, index) = which.split_once(':').unwrap();
+    let index: usize = index.parse().unwrap();
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    for (name, good) in seeds() {
+        let cases = broken(&good, &mut rng);
+        if name == want {
+            let o = DecodeOpts::full(8192);
+            let _ = decode_unguarded(&cases[index], Path::new(name), o, &mut |_| {});
+            return;
+        }
+    }
 }
 
 #[test]

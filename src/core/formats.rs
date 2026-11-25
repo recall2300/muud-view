@@ -2,7 +2,8 @@
 //! files (their stored composite image) and camera RAW files (the full-size
 //! JPEG preview every camera embeds).
 //!
-//! HEIC and AVIF are deliberately absent — see docs/FORMATS.md.
+//! HEIC is deliberately absent — see docs/FORMATS.md. AVIF is in `avif`,
+//! JPEG XL in `jxl`.
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};

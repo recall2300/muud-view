@@ -18,7 +18,7 @@ const CAPABILITIES: &str = r"Software\muud-view\Capabilities";
 /// Extensions registered for "Open with" and default-app selection.
 pub const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "jfif", "png", "gif", "webp", "bmp", "tif", "tiff", "tga", "ico", "qoi", "dds",
-    "hdr", "exr", "jxl",
+    "hdr", "exr", "jxl", "avif",
 ];
 
 /// One registry write under HKEY_CURRENT_USER. `name: None` is the default value.

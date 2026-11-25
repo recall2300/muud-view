@@ -1,4 +1,5 @@
 pub mod archive;
+pub mod avif;
 #[cfg(test)]
 mod bench;
 pub mod color;

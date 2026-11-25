@@ -252,6 +252,9 @@ pub(crate) fn decode_unguarded(
     {
         panic!("test panic");
     }
+    if super::avif::is_avif(bytes) {
+        return super::avif::decode(bytes, opts);
+    }
     if super::jxl::is_jxl(bytes) {
         return super::jxl::decode(bytes, path, opts, partial);
     }
@@ -408,7 +411,7 @@ pub(super) fn with_full(mut d: Decoded, full: Option<ColorImage>) -> Decoded {
 /// Converts the final pixels (after shrinking, so it is cheap) from an
 /// embedded profile to sRGB. Returns the profile name and whether
 /// anything was converted.
-fn manage_color(
+pub(crate) fn manage_color(
     icc: Option<&[u8]>,
     image: &mut ColorImage,
     tiles: &mut [Tile],
