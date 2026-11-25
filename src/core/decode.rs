@@ -32,6 +32,10 @@ pub struct DecodeOpts {
     pub tile: bool,
     /// Convert colours from an embedded ICC profile to sRGB.
     pub color: bool,
+    /// Screen quality: also hand back the full-resolution pixels that were
+    /// decoded on the way (in [`Decoded::full`]), so zooming in later needs
+    /// no second decode.
+    pub keep_full: bool,
 }
 
 impl DecodeOpts {
@@ -42,6 +46,7 @@ impl DecodeOpts {
             fit: None,
             tile: false,
             color: true,
+            keep_full: false,
         }
     }
 
@@ -60,6 +65,7 @@ pub const TILE_SIDE: usize = 4096;
 pub const MAX_TILED_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
 /// One piece of an image too large for a single GPU texture.
+#[derive(Clone)]
 pub struct Tile {
     /// Position and size in stored (not rotated) pixels.
     pub x: usize,
@@ -102,6 +108,7 @@ impl Orientation {
     }
 }
 
+#[derive(Clone)]
 pub struct Decoded {
     pub frames: Vec<Frame>,
     /// Upright size in image pixels (after orientation, before any
@@ -132,6 +139,8 @@ pub struct Decoded {
     pub color_converted: bool,
     /// False for an animation still being decoded (more frames follow).
     pub complete: bool,
+    /// With [`DecodeOpts::keep_full`]: the same image at full resolution.
+    pub full: Option<Box<Decoded>>,
 }
 
 impl Decoded {
@@ -194,6 +203,7 @@ impl Decoded {
             profile: None,
             color_converted: false,
             complete: true,
+            full: None,
         }
     }
 }
@@ -258,6 +268,7 @@ pub fn decode_streaming(
             profile: None,
             color_converted: false,
             complete,
+            full: None,
         }
     };
     let mut stream = |frames: &[Frame], w: u32, h: u32, reduced: bool| {
@@ -311,13 +322,13 @@ pub fn decode_streaming(
         // Opaque: premultiplied and unmultiplied are identical, skip the maths.
         opaque_color_image(img)
     };
-    let (mut image, mut tiles, reduced) = finish(image, opts, Orientation::default());
+    let (mut image, mut tiles, reduced, kept) = finish_keep(image, opts, Orientation::default());
     let tiled_size = tiled_size(&tiles);
     let (profile, color_converted) = manage_color(icc.as_deref(), &mut image, &mut tiles);
 
     let histogram = histogram_of(&image);
     let alpha = color.has_alpha() && has_alpha(&image);
-    Ok(Decoded {
+    let decoded = Decoded {
         frames: vec![Frame {
             image: Arc::new(image),
             delay: Duration::ZERO,
@@ -339,7 +350,12 @@ pub fn decode_streaming(
         profile,
         color_converted,
         complete: true,
-    })
+        full: None,
+    };
+    // Zooming in later uses these pixels instead of decoding again.
+    // Not when colours were converted: that would cost a full-size
+    // conversion for every image, zoomed or not.
+    Ok(with_full(decoded, kept.filter(|_| !color_converted)))
 }
 
 /// zune-jpeg straight into the texture buffer: no RGB→RGBA pass and no
@@ -366,7 +382,7 @@ fn decode_jpeg(
     dec.decode_into(bytemuck::cast_slice_mut(&mut pixels))
         .map_err(|e| format!("{e:?}"))?;
     let image = ColorImage::new([w, h], pixels);
-    let (mut image, mut tiles, reduced) = finish(image, opts, orientation);
+    let (mut image, mut tiles, reduced, kept) = finish_keep(image, opts, orientation);
     let tiled_size = tiled_size(&tiles);
     let (profile, color_converted) = manage_color(icc.as_deref(), &mut image, &mut tiles);
 
@@ -376,7 +392,7 @@ fn decode_jpeg(
         (w, h)
     };
     let histogram = histogram_of(&image);
-    Ok(Decoded {
+    let decoded = Decoded {
         frames: vec![Frame {
             image: Arc::new(image),
             delay: Duration::ZERO,
@@ -398,7 +414,26 @@ fn decode_jpeg(
         profile,
         color_converted,
         complete: true,
-    })
+        full: None,
+    };
+    // Zooming in later uses these pixels instead of decoding again.
+    // Not when colours were converted: that would cost a full-size
+    // conversion for every image, zoomed or not.
+    Ok(with_full(decoded, kept.filter(|_| !color_converted)))
+}
+
+/// Attaches the full-resolution pixels to a screen-size decode.
+fn with_full(mut d: Decoded, full: Option<ColorImage>) -> Decoded {
+    if let Some(img) = full {
+        let mut f = d.clone();
+        f.frames = vec![Frame {
+            image: Arc::new(img),
+            delay: Duration::ZERO,
+        }];
+        f.reduced = false;
+        d.full = Some(Box::new(f));
+    }
+    d
 }
 
 /// Converts the final pixels (after shrinking, so it is cheap) from an
@@ -529,6 +564,34 @@ fn gpu_target(size: [usize; 2], max_side: usize) -> Option<[usize; 2]> {
 /// otherwise [`fit_for_display`]. Returns (image, tiles, reduced); with
 /// tiles, the image is a screen-size preview.
 pub(super) fn finish(
+    image: ColorImage,
+    opts: DecodeOpts,
+    o: Orientation,
+) -> (ColorImage, Vec<Tile>, bool) {
+    let (image, tiles, reduced, _) = finish_keep(image, opts, o);
+    (image, tiles, reduced)
+}
+
+/// [`finish`], also returning the full-resolution pixels when they were
+/// shrunk for the screen and [`DecodeOpts::keep_full`] asks for them (and
+/// they fit in one texture).
+fn finish_keep(
+    image: ColorImage,
+    opts: DecodeOpts,
+    o: Orientation,
+) -> (ColorImage, Vec<Tile>, bool, Option<ColorImage>) {
+    let [w, h] = image.size;
+    if opts.keep_full && w <= opts.max_side && h <= opts.max_side {
+        if let Some(t) = opts.fit.and_then(|f| screen_target(image.size, f, o)) {
+            let small = downscale(&image, t);
+            return (small, Vec::new(), true, Some(image));
+        }
+    }
+    let (image, tiles, reduced) = finish_inner(image, opts, o);
+    (image, tiles, reduced, None)
+}
+
+fn finish_inner(
     image: ColorImage,
     opts: DecodeOpts,
     o: Orientation,
@@ -1098,6 +1161,38 @@ mod tests {
         let cut = &bytes[..bytes.len() * 3 / 4];
         let d = decode_bytes(cut, Path::new("a.gif"), DecodeOpts::full(8192)).unwrap();
         assert!(d.frames.len() >= 2, "{} frames", d.frames.len());
+    }
+
+    #[test]
+    fn screen_decode_can_keep_the_full_pixels() {
+        let bytes = png_bytes(600, 300, [9, 9, 9, 255]);
+        let opts = DecodeOpts {
+            fit: Some([100, 100]),
+            keep_full: true,
+            ..DecodeOpts::full(8192)
+        };
+        let d = decode_bytes(&bytes, Path::new("a.png"), opts).unwrap();
+        assert_eq!(d.texture_size(), [100, 50]);
+        let full = d.full.as_ref().expect("full pixels kept");
+        assert_eq!(full.texture_size(), [600, 300]);
+        assert!(!full.reduced && full.full.is_none());
+        // Same for the JPEG fast path.
+        let jpeg = synthetic_photo(640, 480);
+        let d = decode_bytes(&jpeg, Path::new("a.jpg"), opts).unwrap();
+        assert_eq!(d.full.as_ref().unwrap().texture_size(), [640, 480]);
+        // Not asked, or nothing was shrunk: nothing extra.
+        let d = decode_bytes(
+            &bytes,
+            Path::new("a.png"),
+            DecodeOpts {
+                keep_full: false,
+                ..opts
+            },
+        )
+        .unwrap();
+        assert!(d.full.is_none());
+        let d = decode_bytes(&png_bytes(50, 50, [1, 1, 1, 255]), Path::new("b.png"), opts).unwrap();
+        assert!(d.full.is_none());
     }
 
     #[test]

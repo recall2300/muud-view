@@ -257,9 +257,19 @@ impl MuudApp {
 
         self.view.offset = clamp_offset(self.view.offset, shown, rect.size());
         self.last_scale = scale;
-        // Zoomed past the screen-size pixels: load every pixel.
-        if cur.as_ref() == Some(&draw_path) && needs_more_pixels(&d, scale) {
-            self.lib.request_full();
+        // Zoomed past the screen-size pixels: draw every pixel. Zoomed back
+        // out: the screen-size texture again (it has mipmaps, the full one
+        // does not). The gap between the two thresholds stops flicker.
+        if cur.as_ref() == Some(&draw_path) {
+            if let Some(Slot::Ready(screen)) = self.lib.get(&draw_path) {
+                match zoom_need(screen, scale) {
+                    ZoomNeed::More => {
+                        self.lib.request_full();
+                    }
+                    ZoomNeed::Less => self.lib.release_full(),
+                    ZoomNeed::Keep => {}
+                }
+            }
         }
         let can_pan = shown.x > rect.width() + 0.5 || shown.y > rect.height() + 0.5;
         if can_pan && resp.hovered() && !moving_split {
@@ -755,15 +765,31 @@ fn quad(texture: egui::TextureId, at: [Pos2; 4], uvs: [Pos2; 4]) -> Shape {
     Shape::mesh(mesh)
 }
 
-/// True if the image is drawn with more screen pixels than its texture has
-/// and a full-resolution decode would add detail.
-pub fn needs_more_pixels(d: &crate::core::decode::Decoded, scale: f32) -> bool {
-    if !d.reduced {
-        return false;
+#[derive(Debug, PartialEq, Eq)]
+pub enum ZoomNeed {
+    /// Drawn larger than the screen-size texture: use full resolution.
+    More,
+    /// Well within it: the screen-size texture is enough.
+    Less,
+    Keep,
+}
+
+/// Whether the view needs the full-resolution pixels of an image whose
+/// screen-size decode is `screen`, drawn at `scale`.
+pub fn zoom_need(screen: &crate::core::decode::Decoded, scale: f32) -> ZoomNeed {
+    if !screen.reduced {
+        return ZoomNeed::Keep;
     }
-    let [tw, th] = d.texture_size();
-    let drawn = d.width.max(d.height) as f32 * scale;
-    drawn > tw.max(th) as f32 * 1.02
+    let [tw, th] = screen.texture_size();
+    let tex = tw.max(th) as f32;
+    let drawn = screen.width.max(screen.height) as f32 * scale;
+    if drawn > tex * 1.02 {
+        ZoomNeed::More
+    } else if drawn < tex * 0.9 {
+        ZoomNeed::Less
+    } else {
+        ZoomNeed::Keep
+    }
 }
 
 #[cfg(test)]
@@ -782,10 +808,11 @@ mod tests {
         d.height = 4640;
         d.reduced = true;
         let fit = 1440.0 / 4640.0;
-        assert!(!needs_more_pixels(&d, fit));
-        assert!(needs_more_pixels(&d, fit * 1.5));
-        assert!(needs_more_pixels(&d, 1.0));
+        assert_eq!(zoom_need(&d, fit), ZoomNeed::Keep);
+        assert_eq!(zoom_need(&d, fit * 1.5), ZoomNeed::More);
+        assert_eq!(zoom_need(&d, 1.0), ZoomNeed::More);
+        assert_eq!(zoom_need(&d, fit * 0.5), ZoomNeed::Less);
         d.reduced = false;
-        assert!(!needs_more_pixels(&d, 1.0));
+        assert_eq!(zoom_need(&d, 1.0), ZoomNeed::Keep);
     }
 }

@@ -1,9 +1,10 @@
 //! The open folder: file list, current position, decoded-image cache and
 //! prefetching. No UI code here, so it is tested directly.
 //!
-//! Images are cached at screen size ([`Quality::Screen`]). Only the current
-//! image is ever held at full resolution, and only once the view needs it
-//! (zoomed in past the screen-size pixels).
+//! Images are cached at screen size ([`Quality::Screen`]). The current image
+//! and the next one also keep the full-resolution pixels their decode made
+//! on the way (no extra work), so zooming in needs no second decode; the
+//! full pixels are drawn only while the view needs them.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -57,8 +58,9 @@ pub struct Library {
     cache: HashMap<PathBuf, Slot>,
     lru: VecDeque<PathBuf>,
     budget: usize,
-    /// The current image at full resolution, once asked for.
-    full: Option<(PathBuf, Arc<Decoded>)>,
+    /// Full-resolution pixels of the current and the next image.
+    fulls: Vec<(PathBuf, Arc<Decoded>)>,
+    /// The image the view wants drawn at full resolution (zoomed in).
     want_full: Option<PathBuf>,
     /// A navigation key is being held: decode only where we are now, so the
     /// images flown past are skipped instead of queued.
@@ -77,7 +79,7 @@ impl Library {
             cache: HashMap::new(),
             lru: VecDeque::new(),
             budget,
-            full: None,
+            fulls: Vec::new(),
             want_full: None,
             rapid: false,
             pinned: None,
@@ -100,7 +102,7 @@ impl Library {
     pub fn clear(&mut self) {
         self.files.clear();
         self.index = 0;
-        self.full = None;
+        self.fulls.clear();
         self.want_full = None;
         self.loader.want(Vec::new());
         self.loader.read_ahead(Vec::new());
@@ -111,7 +113,7 @@ impl Library {
     pub fn reload(&mut self) {
         self.cache.clear();
         self.lru.clear();
-        self.full = None;
+        self.fulls.clear();
         self.want_full = None;
         self.request();
     }
@@ -133,10 +135,11 @@ impl Library {
         self.cache.get(path)
     }
 
-    /// The best decoded image for `path`: full resolution if loaded.
+    /// The best decoded image for `path`: full resolution while the view
+    /// wants it and it is loaded, otherwise screen size.
     pub fn best(&self, path: &Path) -> Option<&Arc<Decoded>> {
-        if let Some((p, d)) = &self.full {
-            if p == path {
+        if self.want_full.as_deref() == Some(path) {
+            if let Some(d) = self.full_of(path) {
                 return Some(d);
             }
         }
@@ -144,6 +147,19 @@ impl Library {
             Some(Slot::Ready(d)) => Some(d),
             _ => None,
         }
+    }
+
+    fn full_of(&self, path: &Path) -> Option<&Arc<Decoded>> {
+        self.fulls.iter().find(|(p, _)| p == path).map(|(_, d)| d)
+    }
+
+    /// The images whose full pixels are kept: the current one and the next
+    /// in the direction of travel.
+    fn keep_full(&self) -> Vec<PathBuf> {
+        if self.files.is_empty() {
+            return Vec::new();
+        }
+        self.around(&[0, 1])
     }
 
     pub fn current_decoded(&self) -> Option<&Arc<Decoded>> {
@@ -226,21 +242,28 @@ impl Library {
         out
     }
 
-    /// Decode jobs for whatever is wanted and not cached yet. A wanted full
-    /// decode comes right after the current image.
+    /// Decode jobs for whatever is wanted and not cached yet. The current
+    /// and next images also keep their full pixels; a wanted full decode
+    /// that is not coming that way goes first.
     pub fn jobs(&self) -> Vec<Job> {
+        let keep = self.keep_full();
         let mut jobs: Vec<Job> = self
             .wanted()
             .into_iter()
             .filter(|p| !self.cache.contains_key(p))
-            .map(Job::screen)
+            .map(|p| {
+                if keep.contains(&p) && self.full_of(&p).is_none() {
+                    Job::screen_full(p)
+                } else {
+                    Job::screen(p)
+                }
+            })
             .collect();
         if let Some(p) = &self.want_full {
-            if self.full.as_ref().map(|(f, _)| f) != Some(p) {
-                // Right after the current image's own screen decode, if that
-                // is still pending; otherwise first.
-                let at = usize::from(jobs.first().is_some_and(|j| &j.path == p));
-                jobs.insert(at, Job::full(p.clone()));
+            // Its screen decode, when still pending, brings the full pixels.
+            let coming = jobs.iter().any(|j| &j.path == p);
+            if self.full_of(p).is_none() && !coming {
+                jobs.insert(0, Job::full(p.clone()));
             }
         }
         jobs
@@ -252,8 +275,9 @@ impl Library {
         self.loader.read_ahead(self.read_list());
     }
 
-    /// Asks for the current image at full resolution, if the cached one was
-    /// shrunk for the screen. Returns true if a new decode was started.
+    /// Draws the current image at full resolution (zoomed in past its
+    /// screen-size pixels): at once if its full pixels are kept, otherwise
+    /// after a decode. Returns true if a decode was started.
     pub fn request_full(&mut self) -> bool {
         let Some(cur) = self.current().cloned() else {
             return false;
@@ -265,25 +289,37 @@ impl Library {
         if !reduced {
             return false;
         }
+        let decode = self.full_of(&cur).is_none();
         self.want_full = Some(cur);
-        self.request();
-        true
+        if decode {
+            self.request();
+        }
+        decode
+    }
+
+    /// Back to the screen-size pixels (zoomed out). The full pixels stay
+    /// kept for zooming in again.
+    pub fn release_full(&mut self) {
+        self.want_full = None;
     }
 
     /// A full-resolution decode was asked for and has not arrived yet.
     pub fn full_pending(&self) -> bool {
-        self.want_full.is_some() && self.full.as_ref().map(|(p, _)| p) != self.want_full.as_ref()
+        self.want_full
+            .as_ref()
+            .is_some_and(|p| self.full_of(p).is_none())
     }
 
+    /// `path` is drawn at full resolution right now.
     pub fn has_full(&self, path: &Path) -> bool {
-        self.full.as_ref().is_some_and(|(p, _)| p == path)
+        self.want_full.as_deref() == Some(path) && self.full_of(path).is_some()
     }
 
+    /// Frees full pixels of images that are no longer current or next.
     fn drop_full_unless_current(&mut self) {
+        let keep = self.keep_full();
+        self.fulls.retain(|(p, _)| keep.contains(p));
         let cur = self.current().cloned();
-        if self.full.as_ref().map(|(p, _)| p) != cur.as_ref() {
-            self.full = None;
-        }
         if self.want_full != cur {
             self.want_full = None;
         }
@@ -301,18 +337,27 @@ impl Library {
                     self.insert(done.path, Slot::Failed(e));
                 }
                 (Quality::Full, Ok(d)) => {
-                    if self.want_full.as_ref() == Some(&done.path) {
-                        self.full = Some((done.path, d));
+                    let wanted = self.want_full.as_ref() == Some(&done.path);
+                    if wanted || self.keep_full().contains(&done.path) {
+                        self.fulls.retain(|(p, _)| p != &done.path);
+                        self.fulls.push((done.path, d));
                     }
                 }
                 (Quality::Full, Err(e)) => {
                     // Keep showing the screen-size image.
                     super::log::error(&format!("full decode {}: {e}", done.path.display()));
                 }
+                // The loader reports these as Screen + Full.
+                (Quality::ScreenFull, _) => {}
             }
         }
         if got {
             self.evict();
+            // Zoomed in, but the screen decode came without full pixels
+            // (colour-converted, or too large): decode them now.
+            if self.full_pending() {
+                self.request();
+            }
         }
         got
     }
@@ -432,7 +477,7 @@ impl Library {
                 *p = new.clone();
             }
         }
-        if let Some((p, _)) = &mut self.full {
+        for (p, _) in self.fulls.iter_mut() {
             if p == old {
                 *p = new.clone();
             }
@@ -489,8 +534,8 @@ impl Library {
             if self.cache.remove(p).is_some() {
                 self.lru.retain(|q| q != p);
             }
-            if self.full.as_ref().is_some_and(|(f, _)| f == p) {
-                self.full = None;
+            if self.fulls.iter().any(|(f, _)| f == p) {
+                self.fulls.retain(|(f, _)| f != p);
                 self.want_full = None;
             }
             reload_current |= before.as_ref() == Some(p);
@@ -726,6 +771,7 @@ mod tests {
         assert!(lib.request_full());
         assert!(!lib.request_full(), "asked once");
         assert_eq!(lib.jobs()[0], Job::full(first.clone()));
+        assert!(lib.full_pending());
         let deadline = Instant::now() + Duration::from_secs(10);
         while !lib.has_full(&first) && Instant::now() < deadline {
             lib.poll();
@@ -831,6 +877,39 @@ mod tests {
         assert_eq!(lib.wanted(), vec![lib.files[15].clone(), a.clone()]);
         lib.set_pinned(None);
         assert!(!lib.wanted().contains(&a));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn current_and_next_keep_full_pixels_for_instant_zoom() {
+        let (mut lib, dir) = lib_with(6);
+        lib.loader().set_screen_size([2, 2]); // everything is "reduced"
+        lib.go_to(1);
+        let jobs = lib.jobs();
+        // Current and next decode with their full pixels; the rest plain.
+        assert_eq!(jobs[0], Job::screen_full(lib.files[1].clone()));
+        assert!(jobs.contains(&Job::screen_full(lib.files[2].clone())));
+        assert!(jobs.contains(&Job::screen(lib.files[3].clone())));
+        let cur = lib.files[1].clone();
+        let next = lib.files[2].clone();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while (lib.full_of(&cur).is_none() || lib.full_of(&next).is_none())
+            && Instant::now() < deadline
+        {
+            lib.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Kept, but drawn at screen size until zoomed.
+        assert_eq!(lib.best(&cur).unwrap().texture_size(), [2, 2]);
+        assert!(!lib.request_full(), "no decode needed");
+        assert!(lib.has_full(&cur));
+        assert_eq!(lib.best(&cur).unwrap().texture_size(), [4, 4]);
+        lib.release_full();
+        assert!(!lib.has_full(&cur));
+        // Moving on: the old current is freed, the next one is kept.
+        lib.go_to(2);
+        assert!(lib.full_of(&cur).is_none());
+        assert!(lib.full_of(&next).is_some());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

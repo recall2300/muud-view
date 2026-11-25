@@ -682,6 +682,8 @@ impl MuudApp {
         let Some(d) = self.lib.best(path).cloned() else {
             return false;
         };
+        // Full-resolution textures keep their mipmaps: between screen size
+        // and 100% they are drawn smaller than they are.
         let opts = self.texture_options();
         let name = path.display().to_string();
         if let Some(t) = self.textures.get_mut(path) {

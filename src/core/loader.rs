@@ -34,6 +34,9 @@ pub const READ_BUDGET: usize = 512 * 1024 * 1024;
 pub enum Quality {
     /// Shrunk to the screen.
     Screen,
+    /// Shrunk to the screen, and the full-resolution pixels decoded on the
+    /// way are handed back too (as a separate [`Quality::Full`] result).
+    ScreenFull,
     /// Every pixel the GPU can hold.
     Full,
 }
@@ -56,6 +59,13 @@ impl Job {
         Self {
             path,
             quality: Quality::Full,
+        }
+    }
+
+    pub fn screen_full(path: PathBuf) -> Self {
+        Self {
+            path,
+            quality: Quality::ScreenFull,
         }
     }
 }
@@ -144,11 +154,12 @@ impl Shared {
         let opts = match quality {
             // Full quality draws huge images in tiles instead of shrinking.
             Quality::Full => DecodeOpts::tiled(max_side),
-            Quality::Screen => {
+            Quality::Screen | Quality::ScreenFull => {
                 let w = self.screen_w.load(Ordering::Relaxed);
                 let h = self.screen_h.load(Ordering::Relaxed);
                 DecodeOpts {
                     fit: (w > 0 && h > 0).then_some([w, h]),
+                    keep_full: quality == Quality::ScreenFull,
                     ..DecodeOpts::full(max_side)
                 }
             }
@@ -337,19 +348,44 @@ fn worker(shared: Arc<Shared>, tx: Sender<Done>, ctx: egui::Context) {
                 .map_err(|e| e.to_string()),
         };
         // Animations arrive in parts so they start playing at once.
+        let partial_quality = match job.quality {
+            Quality::ScreenFull => Quality::Screen,
+            q => q,
+        };
         let mut partial = |mut d: Decoded| {
             d.file_size = bytes.as_ref().map(|b| b.len() as u64).unwrap_or(0);
             let _ = tx.send(Done {
                 path: job.path.clone(),
-                quality: job.quality,
+                quality: partial_quality,
                 result: Ok(Arc::new(d)),
             });
             ctx.request_repaint();
         };
-        let result = bytes
+        let mut result = bytes
             .clone()
-            .and_then(|b| decode_with_meta(&b, &job.path, opts, started, &mut partial))
-            .map(Arc::new);
+            .and_then(|b| decode_with_meta(&b, &job.path, opts, started, &mut partial));
+        // A screen decode that kept its full-resolution pixels: deliver them
+        // first, as their own result.
+        let mut quality = job.quality;
+        if quality == Quality::ScreenFull {
+            quality = Quality::Screen;
+            if let Some((mut full, d)) = result
+                .as_mut()
+                .ok()
+                .and_then(|d| d.full.take().map(|f| (f, d)))
+            {
+                // Copied before the file facts were filled in.
+                full.file_size = d.file_size;
+                full.modified = d.modified;
+                full.decode_time = d.decode_time;
+                let _ = tx.send(Done {
+                    path: job.path.clone(),
+                    quality: Quality::Full,
+                    result: Ok(Arc::new(*full)),
+                });
+            }
+        }
+        let result = result.map(Arc::new);
         {
             let mut st = shared.state.lock().unwrap();
             st.in_flight.remove(&job);
@@ -363,7 +399,7 @@ fn worker(shared: Arc<Shared>, tx: Sender<Done>, ctx: egui::Context) {
         }
         let done = Done {
             path: job.path,
-            quality: job.quality,
+            quality,
             result,
         };
         if tx.send(done).is_err() {
@@ -465,6 +501,34 @@ mod tests {
         let d = done.result.unwrap();
         assert_eq!(d.texture_size(), [400, 200]);
         assert!(!d.reduced);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn screen_full_job_hands_back_both() {
+        let dir = temp_dir("both");
+        let p = dir.join("big.png");
+        std::fs::write(&p, png_bytes(400, 200, [1, 2, 3, 255])).unwrap();
+        let loader = Loader::new(egui::Context::default(), 1);
+        loader.set_screen_size([100, 100]);
+        loader.want([Job::screen_full(p.clone())]);
+        let mut got: Vec<Done> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while got.len() < 2 {
+            assert!(Instant::now() < deadline, "decoded in time");
+            got.extend(loader.poll());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let second = got.pop().unwrap();
+        let first = got.pop().unwrap();
+        assert_eq!(first.quality, Quality::Full, "full first");
+        let full = first.result.unwrap();
+        assert_eq!(full.texture_size(), [400, 200]);
+        assert_eq!(full.file_size, std::fs::metadata(&p).unwrap().len());
+        assert_eq!(second.quality, Quality::Screen);
+        let d = second.result.unwrap();
+        assert_eq!(d.texture_size(), [100, 50]);
+        assert!(d.full.is_none(), "not kept twice");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
