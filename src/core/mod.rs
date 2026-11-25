@@ -7,6 +7,8 @@ pub mod decode;
 pub mod exif_info;
 pub mod folder;
 pub mod formats;
+mod fuzz;
+pub mod guard;
 pub mod history;
 pub mod keymap;
 pub mod library;

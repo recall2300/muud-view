@@ -252,10 +252,10 @@ impl ThumbLoader {
                                 st = cv.wait(st).unwrap();
                             }
                         };
-                        let result = match &cache {
+                        let result = super::guard::catch("thumbnail", || match &cache {
                             Some(dir) => make_cached(&path, dir),
                             None => make(&path),
-                        };
+                        });
                         if tx.send((path, result)).is_err() {
                             return;
                         }
@@ -367,6 +367,18 @@ mod tests {
         // Red preview, not the green main image: it really came from EXIF.
         let c = t.pixels[t.pixels.len() / 2];
         assert!(c.r() > 150 && c.g() < 100, "{c:?}");
+        std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_crashing_decoder_gives_a_thumbnail_error() {
+        let img = image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let p = temp(crate::core::guard::PANIC_FILE, &png);
+        assert!(make(&p).err().unwrap().contains("crashed"));
         std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
     }
 

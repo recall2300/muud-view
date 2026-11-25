@@ -222,6 +222,22 @@ pub fn decode_streaming(
     opts: DecodeOpts,
     partial: &mut dyn FnMut(Decoded),
 ) -> Result<Decoded, String> {
+    super::guard::catch("decoder", || decode_unguarded(bytes, path, opts, partial))
+}
+
+pub(crate) fn decode_unguarded(
+    bytes: &[u8],
+    path: &Path,
+    opts: DecodeOpts,
+    partial: &mut dyn FnMut(Decoded),
+) -> Result<Decoded, String> {
+    #[cfg(test)]
+    if path
+        .file_name()
+        .is_some_and(|n| n == super::guard::PANIC_FILE)
+    {
+        panic!("test panic");
+    }
     if let Some(kind) = super::formats::detect(bytes, path) {
         return super::formats::decode(kind, bytes, path, opts, partial);
     }

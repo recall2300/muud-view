@@ -79,7 +79,8 @@ winresource = "0.1"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
-panic = "abort"
+# Unwind (not abort): a crash inside a decoder on a broken file is caught
+# and shown as an error for that file instead of closing the app.
 strip = true
 
 # Speed check in CI: release optimisation without the slow fat-LTO link.

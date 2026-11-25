@@ -315,7 +315,9 @@ fn reader(shared: Arc<Shared>) {
                 st = shared.wake_reader.wait(st).unwrap();
             }
         };
-        let bytes = super::archive::read(&path).ok().map(Arc::new);
+        let bytes = super::guard::catch_io("reader", || super::archive::read(&path))
+            .ok()
+            .map(Arc::new);
         let mut st = shared.state.lock().unwrap();
         st.reading.remove(&path);
         match bytes {
@@ -356,9 +358,9 @@ fn worker(shared: Arc<Shared>, tx: Sender<Done>, ctx: egui::Context) {
         let started = Instant::now();
         let bytes = match cached {
             Some(b) => Ok(b),
-            None => super::archive::read(&job.path)
-                .map(Arc::new)
-                .map_err(|e| e.to_string()),
+            None => {
+                super::guard::catch_io("reader", || super::archive::read(&job.path)).map(Arc::new)
+            }
         };
         // Animations arrive in parts so they start playing at once.
         let partial_quality = match job.quality {
@@ -440,7 +442,7 @@ fn decode_with_meta(
 /// Reads and decodes a file on the calling thread.
 pub fn decode_file(path: &Path, opts: DecodeOpts) -> Result<Decoded, String> {
     let started = Instant::now();
-    let bytes = super::archive::read(path).map_err(|e| e.to_string())?;
+    let bytes = super::guard::catch_io("reader", || super::archive::read(path))?;
     decode_with_meta(&bytes, path, opts, started, &mut |_| {})
 }
 
@@ -480,6 +482,29 @@ mod tests {
             assert!(Instant::now() < deadline, "decoded in time");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn a_crashing_decoder_does_not_stop_the_loader() {
+        let dir = temp_dir("panic");
+        let bad = dir.join(crate::core::guard::PANIC_FILE);
+        let good = dir.join("good.png");
+        std::fs::write(&bad, png_bytes(4, 4, [0, 0, 0, 255])).unwrap();
+        std::fs::write(&good, png_bytes(4, 4, [0, 255, 0, 255])).unwrap();
+        // One decoder thread: if the crash killed it, nothing would follow.
+        let loader = Loader::new(egui::Context::default(), 1);
+        loader.want([Job::screen(bad.clone())]);
+        let done = wait_done(&loader);
+        assert_eq!(done.path, bad);
+        assert_eq!(
+            done.result.err().as_deref(),
+            Some("decoder crashed: test panic")
+        );
+        loader.want([Job::screen(good.clone())]);
+        let done = wait_done(&loader);
+        assert_eq!(done.path, good);
+        assert!(done.result.is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

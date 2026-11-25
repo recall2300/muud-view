@@ -139,8 +139,95 @@ fn svg(bytes: &[u8], opts: DecodeOpts) -> Result<Decoded, String> {
 }
 
 /// The flattened image Photoshop stores alongside the layers.
+/// The `psd` crate trusts every length in the file and slices without
+/// checking, so a broken file makes it crash. It also parses every layer,
+/// which a viewer showing the stored composite does not need. So: check the
+/// layout here and hand it a copy with the image resources and layers left
+/// out and the composite image unpacked — header, colour table and raw
+/// planes only.
+fn psd_composite_only(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let bad = || "damaged Photoshop file".to_string();
+    let be16 = |at: usize| -> Option<usize> {
+        Some(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?) as usize)
+    };
+    let be32 = |at: usize| -> Option<usize> {
+        Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as usize)
+    };
+    if !bytes.starts_with(b"8BPS") || be16(4) != Some(1) {
+        return Err("unsupported Photoshop file (only PSD, not PSB)".into());
+    }
+    let channels = be16(12).ok_or_else(bad)?;
+    let (h, w) = (be32(14).ok_or_else(bad)?, be32(18).ok_or_else(bad)?);
+    let depth = be16(22).ok_or_else(bad)?;
+    if !(1..=56).contains(&channels) || w == 0 || h == 0 || w > 30_000 || h > 30_000 {
+        return Err(bad());
+    }
+    if depth != 8 {
+        return Err(format!("unsupported Photoshop bit depth ({depth})"));
+    }
+    // Colour mode data, image resources, layers and masks: length-prefixed.
+    let colour = 26;
+    let resources = colour + 4 + be32(colour).ok_or_else(bad)?;
+    let layers = resources + 4 + be32(resources).ok_or_else(bad)?;
+    let image = layers + 4 + be32(layers).ok_or_else(bad)?;
+    let compression = be16(image).ok_or_else(bad)?;
+    let data = image + 2;
+    let plane = w * h;
+    let mut out = Vec::with_capacity(resources + 10 + plane * channels);
+    out.extend_from_slice(&bytes[..resources]);
+    out.extend_from_slice(&[0; 8]);
+    out.extend_from_slice(&0u16.to_be_bytes()); // raw
+    match compression {
+        0 => {
+            let raw = bytes.get(data..data + plane * channels).ok_or_else(bad)?;
+            out.extend_from_slice(raw);
+        }
+        1 => {
+            // PackBits: a byte count per row and channel, then the rows.
+            // Unpacked here, with every row held to the image width.
+            let rows = channels * h;
+            let table = bytes.get(data..data + rows * 2).ok_or_else(bad)?;
+            let mut at = data + rows * 2;
+            for c in table.chunks_exact(2) {
+                let len = u16::from_be_bytes([c[0], c[1]]) as usize;
+                let packed = bytes.get(at..at + len).ok_or_else(bad)?;
+                at += len;
+                let start = out.len();
+                unpack_bits(packed, &mut out, w);
+                out.resize(start + w, 0);
+            }
+        }
+        _ => return Err(format!("unsupported Photoshop compression ({compression})")),
+    }
+    Ok(out)
+}
+
+/// PackBits rows, up to `max` bytes.
+fn unpack_bits(mut src: &[u8], out: &mut Vec<u8>, max: usize) {
+    let end = out.len() + max;
+    while let Some((&n, rest)) = src.split_first() {
+        src = rest;
+        let room = end - out.len();
+        if n < 128 {
+            let take = (n as usize + 1).min(src.len());
+            out.extend_from_slice(&src[..take.min(room)]);
+            src = &src[take..];
+        } else if n > 128 {
+            let Some((&b, rest)) = src.split_first() else {
+                break;
+            };
+            src = rest;
+            out.extend(std::iter::repeat_n(b, (257 - n as usize).min(room)));
+        }
+        if out.len() >= end {
+            break;
+        }
+    }
+}
+
 fn psd(bytes: &[u8], opts: DecodeOpts) -> Result<Decoded, String> {
-    let psd = psd::Psd::from_bytes(bytes).map_err(|e| e.to_string())?;
+    let bytes = psd_composite_only(bytes)?;
+    let psd = psd::Psd::from_bytes(&bytes).map_err(|e| e.to_string())?;
     let (w, h) = (psd.width(), psd.height());
     let rgba = psd.rgba();
     let mut d = still(&rgba, [w as usize, h as usize], [w, h], "PSD", opts);
@@ -447,6 +534,35 @@ mod tests {
         assert_eq!((d.width, d.height), (2, 1));
         let p = d.frames[0].image.pixels[0];
         assert_eq!((p.r(), p.g(), p.b()), (10, 30, 50));
+    }
+
+    #[test]
+    fn packed_psd_is_unpacked_and_broken_ones_are_refused() {
+        let b = crate::core::fuzz::psd(true);
+        let d = decode(
+            Extra::Psd,
+            &b,
+            Path::new("a.psd"),
+            DecodeOpts::full(8192),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!((d.width, d.height), (3, 2));
+        let px = |i: usize| {
+            let p = d.frames[0].image.pixels[i];
+            (p.r(), p.g(), p.b())
+        };
+        // Rows are stored channel by channel: R rows 0-1, G 2-3, B 4-5.
+        assert_eq!(px(0), (0, 80, 160));
+        assert_eq!(px(5), (60, 140, 220));
+        // A row count past the end of the file: refused, not a crash.
+        let mut cut = b.clone();
+        cut.truncate(cut.len() - 3);
+        assert!(psd_composite_only(&cut).is_err());
+        // PSB (version 2) is not read.
+        let mut psb = b;
+        psb[5] = 2;
+        assert!(psd_composite_only(&psb).unwrap_err().contains("PSB"));
     }
 
     #[test]

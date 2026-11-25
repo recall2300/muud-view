@@ -475,7 +475,9 @@ impl MuudApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(job());
+            let msg = crate::core::guard::catch("job", || Ok(job()))
+                .unwrap_or_else(|e| format!("FAILED · {e}"));
+            let _ = tx.send(msg);
             ctx.request_repaint();
         });
         self.jobs.push(rx);
