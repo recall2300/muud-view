@@ -102,6 +102,98 @@ pub fn make(path: &Path) -> Result<ColorImage, String> {
     Ok(fit(upright(frame, d.orientation)))
 }
 
+/// Most disk space the thumbnail cache may use; beyond it the oldest go.
+pub const CACHE_MAX: u64 = 256 * 1024 * 1024;
+const CACHE_TARGET: u64 = 192 * 1024 * 1024;
+
+pub fn cache_dir() -> PathBuf {
+    super::log::data_dir().join("thumbs")
+}
+
+/// A stable 64-bit hash (FNV-1a): cache file names must not change between
+/// builds, which `std`'s hasher does not promise.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ *b as u64).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// Cache file name for `path` as it is now (path, size, time): a changed
+/// file gets a new thumbnail. Archive entries use the archive's facts.
+pub fn cache_key(path: &Path) -> Option<String> {
+    let real = match super::archive::split(path) {
+        Some((archive, _)) if !path.exists() => archive,
+        _ => path.to_path_buf(),
+    };
+    let meta = std::fs::metadata(&real).ok()?;
+    let time = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    let id = format!("{}|{}|{}|{}", path.display(), meta.len(), time, THUMB);
+    Some(format!("{:016x}", fnv1a(id.as_bytes())))
+}
+
+/// [`make`], through the thumbnail cache in `dir`: opening a folder again
+/// shows its thumbnails without decoding anything.
+pub fn make_cached(path: &Path, dir: &Path) -> Result<ColorImage, String> {
+    let key = cache_key(path);
+    if let Some(k) = &key {
+        for ext in ["jpg", "png"] {
+            let file = dir.join(format!("{k}.{ext}"));
+            if let Ok(bytes) = std::fs::read(&file) {
+                let opts = DecodeOpts::full(4096);
+                if let Ok(d) = super::decode::decode_streaming(&bytes, &file, opts, &mut |_| {}) {
+                    if let Some(f) = d.frames.into_iter().next() {
+                        return Ok((*f.image).clone());
+                    }
+                }
+            }
+        }
+    }
+    let img = make(path)?;
+    if let Some(k) = key {
+        let png = img.pixels.iter().any(|p| p.a() < 255);
+        if let Ok(bytes) = super::share::encode_q(&img, png, 85) {
+            let _ = std::fs::create_dir_all(dir);
+            let _ = std::fs::write(
+                dir.join(format!("{k}.{}", if png { "png" } else { "jpg" })),
+                bytes,
+            );
+        }
+    }
+    Ok(img)
+}
+
+/// Deletes the oldest cached thumbnails once the cache is over
+/// [`CACHE_MAX`], down to three quarters of it.
+pub fn prune(dir: &Path, max: u64, target: u64) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = rd
+        .filter_map(Result::ok)
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            Some((m.modified().ok()?, m.len(), e.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|f| f.1).sum();
+    if total <= max {
+        return;
+    }
+    files.sort();
+    for (_, len, p) in files {
+        if total <= target {
+            break;
+        }
+        if std::fs::remove_file(&p).is_ok() {
+            total -= len;
+        }
+    }
+}
+
 struct State {
     queue: VecDeque<PathBuf>,
     shutdown: bool,
@@ -120,6 +212,16 @@ pub struct ThumbLoader {
 
 impl ThumbLoader {
     pub fn new(ctx: egui::Context, threads: usize) -> Self {
+        Self::with_cache(ctx, threads, Some(cache_dir()))
+    }
+
+    /// With thumbnails cached in `cache` (or not at all).
+    pub fn with_cache(ctx: egui::Context, threads: usize, cache: Option<PathBuf>) -> Self {
+        if let Some(dir) = cache.clone() {
+            let _ = std::thread::Builder::new()
+                .name("thumbs-prune".into())
+                .spawn(move || prune(&dir, CACHE_MAX, CACHE_TARGET));
+        }
         let state = Arc::new((
             Mutex::new(State {
                 queue: VecDeque::new(),
@@ -133,6 +235,7 @@ impl ThumbLoader {
                 let state = state.clone();
                 let tx: Sender<_> = tx.clone();
                 let ctx = ctx.clone();
+                let cache = cache.clone();
                 std::thread::Builder::new()
                     .name(format!("thumbs-{i}"))
                     .spawn(move || loop {
@@ -149,7 +252,10 @@ impl ThumbLoader {
                                 st = cv.wait(st).unwrap();
                             }
                         };
-                        let result = make(&path);
+                        let result = match &cache {
+                            Some(dir) => make_cached(&path, dir),
+                            None => make(&path),
+                        };
                         if tx.send((path, result)).is_err() {
                             return;
                         }
@@ -277,6 +383,56 @@ mod tests {
     }
 
     #[test]
+    fn thumbnails_are_cached_on_disk_and_refreshed_when_the_file_changes() {
+        let img = image::RgbaImage::from_pixel(600, 300, image::Rgba([0, 0, 200, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let p = temp("c.png", &png);
+        let cache = p.parent().unwrap().join("cache");
+        let first = make_cached(&p, &cache).unwrap();
+        assert_eq!(first.size, [THUMB, THUMB / 2]);
+        let key = cache_key(&p).unwrap();
+        let file = cache.join(format!("{key}.jpg"));
+        assert!(file.exists());
+        // Swap the cached file for a red one: the next call must use it.
+        let red = image::RgbImage::from_pixel(8, 4, image::Rgb([250, 0, 0]));
+        let mut jpg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpg, 90)
+            .encode_image(&red)
+            .unwrap();
+        std::fs::write(&file, jpg).unwrap();
+        let again = make_cached(&p, &cache).unwrap();
+        assert_eq!(again.size, [8, 4]);
+        // The file changes: a new key, so a fresh thumbnail.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&p, &png[..]).unwrap();
+        let mut bigger = png.clone();
+        bigger.extend_from_slice(&[0; 16]); // different size too
+        std::fs::write(&p, &bigger).unwrap();
+        assert_ne!(cache_key(&p).unwrap(), key);
+        std::fs::remove_dir_all(p.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn prune_drops_the_oldest_beyond_the_limit() {
+        let dir = crate::core::archive::tests::temp_dir("prune");
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("{i}.jpg")), vec![0u8; 100]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        prune(&dir, 350, 250);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["3.jpg", "4.jpg"]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn black_bars_are_trimmed() {
         let mut px = vec![Color32::BLACK; 4 * 4];
         for y in 1..3 {
@@ -298,7 +454,7 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let p = temp("t.png", &png);
-        let l = ThumbLoader::new(egui::Context::default(), 2);
+        let l = ThumbLoader::with_cache(egui::Context::default(), 2, None);
         l.want(vec![p.clone()]);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut got = Vec::new();

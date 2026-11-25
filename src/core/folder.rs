@@ -221,6 +221,7 @@ mod tests {
         assert_eq!(sibling(&dir.join("d.cbz"), -1), Some(dir.join("c")));
         assert_eq!(sibling(&dir.join("a"), -1), None);
         assert_eq!(sibling(&dir.join("d.cbz"), 1), None);
+        crate::core::archive::close_all();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

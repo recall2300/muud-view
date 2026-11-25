@@ -70,6 +70,12 @@ fn cache() -> &'static Mutex<Vec<(PathBuf, Shared)>> {
 
 const KEEP_OPEN: usize = 4;
 
+/// Closes every cached archive, so Windows lets their folders be moved or
+/// deleted (called when another folder or archive is opened).
+pub fn close_all() {
+    cache().lock().unwrap().clear();
+}
+
 fn open(archive: &Path) -> std::io::Result<Shared> {
     let meta = std::fs::metadata(archive)?;
     let stamp = (meta.len(), meta.modified().ok());
@@ -282,6 +288,7 @@ pub mod tests {
             .unwrap()
             .to_rgba8();
         assert_eq!(img.get_pixel(0, 0).0, [9, 9, 9, 255]);
+        close_all();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

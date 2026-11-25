@@ -286,6 +286,8 @@ impl MuudApp {
     // Files
 
     pub(crate) fn open(&mut self, path: &Path) {
+        // Let go of archives from before (Windows keeps their folders busy).
+        crate::core::archive::close_all();
         if crate::core::archive::is_archive(path) && path.is_file() {
             self.open_archive(path);
             return;
@@ -370,6 +372,7 @@ impl MuudApp {
     }
 
     pub(crate) fn close_file(&mut self) {
+        crate::core::archive::close_all();
         self.watcher = None;
         self.all_files = None;
         self.grid = false;
